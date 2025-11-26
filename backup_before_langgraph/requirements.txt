@@ -1,0 +1,46 @@
+# Core Framework & Web Server
+uvicorn[standard]
+pydantic
+pydantic-settings
+
+# PDF Processing
+PyPDF2
+pdfplumber
+pdf2image
+pytesseract
+Pillow
+
+# AI/ML - OpenAI
+openai
+tiktoken
+langchain
+langchain-openai
+
+# Redis (for orchestrator)
+redis
+
+# Data Processing
+numpy
+pandas
+
+# HTTP & Async
+httpx
+aiohttp
+
+# Utilities
+python-dotenv
+python-multipart
+pyyaml
+tenacity
+
+# Logging
+loguru
+
+# A2A Protocol
+a2a-sdk[http-server]
+
+# Streamlit Frontend
+streamlit
+
+# Database
+sqlalchemy

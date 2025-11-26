@@ -5,7 +5,7 @@ Uses LLM assistance to identify policy boundaries and prevent splitting policies
 import re
 import tiktoken
 import json
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any
 from openai import AsyncOpenAI
 from app.utils.logger import get_logger
 from app.core.pdf_processor import PDFPage

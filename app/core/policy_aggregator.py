@@ -4,7 +4,7 @@ Policy hierarchy aggregation and analysis.
 This module provides policy-agnostic hierarchy analysis for generating
 contextually-aware decision trees.
 """
-from typing import List, Dict, Set, Tuple, Any, Optional
+from typing import List, Dict, Any, Optional
 from app.models.schemas import SubPolicy, PolicyHierarchy
 from app.utils.logger import get_logger
 

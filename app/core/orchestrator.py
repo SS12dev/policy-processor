@@ -4,7 +4,7 @@ Main orchestrator that coordinates the entire document processing pipeline.
 import asyncio
 import uuid
 from datetime import datetime
-from typing import Dict, Any, Optional, AsyncIterator
+from typing import Optional, AsyncIterator
 from app.utils.logger import get_logger
 from app.utils.redis_client import get_redis_client
 from app.core.pdf_processor import PDFProcessor

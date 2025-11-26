@@ -2,8 +2,7 @@
 Policy extraction engine with hierarchy detection.
 """
 import json
-import re
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from openai import AsyncOpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 from config.settings import settings

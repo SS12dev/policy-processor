@@ -19,6 +19,12 @@ from app.models.schemas import (
     PolicyHierarchy,
 )
 from app.core.policy_aggregator import PolicyAggregator, PolicyGenerationPlan
+from app.core.tree_generation_prompts import (
+    DECISION_TREE_SYSTEM_PROMPT,
+    get_aggregator_prompt,
+    get_leaf_prompt,
+)
+from app.core.tree_validator import validate_tree_structure
 
 logger = get_logger(__name__)
 
@@ -79,11 +85,18 @@ class DecisionTreeGenerator:
             async with semaphore:
                 return await self._generate_hierarchical_tree(policy, index, total)
 
-        # Generate trees in order
-        logger.info(f"Creating {len(ordered_policies)} tree generation tasks...")
+        # Filter to only leaf policies (aggregator policies don't need decision trees)
+        leaf_policies = [p for p in ordered_policies if len(p.children) == 0]
+        logger.info(
+            f"Filtered {len(leaf_policies)} leaf policies from {len(ordered_policies)} total policies. "
+            f"Skipping {len(ordered_policies) - len(leaf_policies)} aggregator policies (they don't need decision trees)."
+        )
+
+        # Generate trees only for leaf policies
+        logger.info(f"Creating {len(leaf_policies)} tree generation tasks (leaf policies only)...")
         tasks = []
-        for i, policy in enumerate(ordered_policies):
-            tasks.append(generate_with_semaphore(policy, i + 1, len(ordered_policies)))
+        for i, policy in enumerate(leaf_policies):
+            tasks.append(generate_with_semaphore(policy, i + 1, len(leaf_policies)))
 
         logger.info(f"Executing tree generation tasks in parallel (max {settings.openai_max_concurrent_requests} concurrent)...")
         # Run all tasks with concurrency control
@@ -96,13 +109,13 @@ class DecisionTreeGenerator:
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 errors_count += 1
-                logger.error(f"Error generating tree for policy {ordered_policies[i].policy_id}: {result}")
+                logger.error(f"Error generating tree for policy {leaf_policies[i].policy_id}: {result}")
             elif result is not None:
                 trees.append(result)
                 self.generated_trees[result.policy_id] = result
                 logger.debug(f"Successfully stored tree for policy {result.policy_id}")
 
-        logger.info(f"Tree generation complete - Success: {len(trees)}/{len(ordered_policies)}, Failed: {errors_count}")
+        logger.info(f"Tree generation complete - Success: {len(trees)}/{len(leaf_policies)}, Failed: {errors_count}")
 
         return trees
 
@@ -269,35 +282,13 @@ class DecisionTreeGenerator:
         prompt = self._create_tree_generation_prompt(policy)
         prompt_length = len(prompt)
 
-        # Enhanced system prompt with explicit structure requirements
-        system_prompt = """You are an expert at converting policy documents into clear, logical decision trees with eligibility questions.
-
-CRITICAL REQUIREMENTS:
-1. You MUST return a valid JSON object with a "root_node" key
-2. The root_node MUST contain actual question and outcome data, NOT placeholders or null values
-3. Each question node MUST have:
-   - "node_type": "question"
-   - "question": object with question_type, question_text, explanation (REQUIRED), and type-specific fields
-   - "children": dictionary mapping answers to child nodes
-   - "source_references": array with at least one source reference (page number, section, quoted text)
-4. Each outcome node MUST have:
-   - "node_type": "outcome"
-   - "outcome": actual outcome text (not empty, not "TODO", not "placeholder")
-   - "outcome_type": one of [approved, denied, refer_to_manual, conditional]
-   - "source_references": array with source references where applicable
-5. Create COMPLETE decision trees with all branches leading to actual outcomes
-6. ALWAYS provide "explanation" for every question - explain WHY this question matters
-7. ALWAYS include "source_references" with page numbers and quoted text from the source policy
-
-NEVER return empty objects, placeholders, or incomplete structures. Every node must be fully populated with meaningful content including explanations and source references."""
-
         try:
             logger.debug(f"Calling {self.model} API for tree generation (policy: {policy.policy_id}, prompt: {prompt_length} chars)")
 
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": system_prompt},
+                    {"role": "system", "content": DECISION_TREE_SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.1,
@@ -307,20 +298,26 @@ NEVER return empty objects, placeholders, or incomplete structures. Every node m
             logger.debug(f"Received tree response from {self.model} for policy {policy.policy_id}")
 
             content = response.choices[0].message.content
+            logger.debug(f"[LLM Response] Content length: {len(content) if content else 0} characters")
 
             # Validate response is not empty
             if not content or not content.strip():
+                logger.error(f"[LLM Response] Empty response for policy {policy.policy_id}")
                 raise ValueError(f"LLM returned empty response for policy {policy.policy_id}")
 
             logger.debug(f"Parsing JSON response for policy {policy.policy_id}...")
             result = json.loads(content)
+            logger.debug(f"[LLM Response] Parsed JSON keys: {list(result.keys())}")
 
             # Validate result structure before parsing
             if not result or "root_node" not in result:
+                logger.error(f"[LLM Response] Missing 'root_node' key. Available keys: {list(result.keys())}")
                 raise ValueError(f"LLM response missing 'root_node' for policy {policy.policy_id}")
 
             root_node_data = result["root_node"]
+            logger.debug(f"[LLM Response] Root node type: {type(root_node_data)}, keys: {list(root_node_data.keys()) if isinstance(root_node_data, dict) else 'N/A'}")
             if not root_node_data or not isinstance(root_node_data, dict):
+                logger.error(f"[LLM Response] Invalid root_node: {root_node_data}")
                 raise ValueError(f"LLM returned empty or invalid root_node for policy {policy.policy_id}")
 
             # Check for placeholder/stub content
@@ -348,11 +345,33 @@ NEVER return empty objects, placeholders, or incomplete structures. Every node m
             tree.total_paths = self._count_paths(tree.root_node)
             tree.max_depth = self._calculate_depth(tree.root_node)
 
+            # Validate tree structure and routing
+            logger.debug(f"Validating tree structure for policy {policy.policy_id}...")
+            validation_result = validate_tree_structure(tree)
+
+            # Populate validation fields
+            tree.has_complete_routing = validation_result["has_complete_routing"]
+            tree.unreachable_nodes = validation_result["unreachable_nodes"]
+            tree.incomplete_routes = validation_result["incomplete_routes"]
+            tree.total_outcomes = validation_result["outcome_nodes"]
+
+            if not tree.has_complete_routing:
+                logger.warning(
+                    f"Tree for policy {policy.policy_id} has incomplete routing - "
+                    f"Unreachable: {len(tree.unreachable_nodes)}, Incomplete routes: {len(tree.incomplete_routes)}"
+                )
+            else:
+                logger.debug(f"Tree validation passed - all paths complete for policy {policy.policy_id}")
+
             # Validate tree has meaningful content
             if tree.total_nodes < 2:  # At least question + outcome
                 logger.warning(f"Tree for policy {policy.policy_id} has only {tree.total_nodes} nodes - may be incomplete")
 
-            logger.info(f"Successfully generated tree for policy {policy.policy_id}: {tree.total_nodes} nodes, {tree.total_paths} paths, depth {tree.max_depth}, confidence {tree.confidence_score:.2f}")
+            logger.info(
+                f"Successfully generated tree for policy {policy.policy_id}: "
+                f"{tree.total_nodes} nodes, {tree.total_paths} paths, depth {tree.max_depth}, "
+                f"confidence {tree.confidence_score:.2f}, routing_complete: {tree.has_complete_routing}"
+            )
 
             return tree
 
@@ -386,28 +405,19 @@ NEVER return empty objects, placeholders, or incomplete structures. Every node m
             policy, self.generation_plan
         )
 
-        # Create specialized prompt for aggregator trees
-        prompt = self._create_aggregator_prompt(policy, context, aggregation_strategy)
-
-        # Enhanced system prompt for aggregator trees
-        system_prompt = """You are an expert at creating navigation trees that route users to the correct sub-policy based on their scenario.
-
-CRITICAL REQUIREMENTS:
-1. You MUST return a valid JSON object with a "root_node" key
-2. The root_node MUST contain a routing question (usually multiple_choice) with options for each child policy
-3. Each option MUST include:
-   - "routes_to_tree": the child policy_id
-   - "routes_to_policy": the child policy title
-4. Each answer path MUST lead to an outcome node that references the correct child policy
-5. Create COMPLETE routing logic - every child policy must be reachable
-
-NEVER return empty objects or incomplete routing structures. Every route must be fully defined."""
+        # Create specialized prompt for aggregator trees using enhanced template
+        prompt = get_aggregator_prompt(
+            policy_title=policy.title,
+            policy_description=policy.description,
+            child_policies=policy.children,
+            context=str(context)
+        )
 
         try:
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": system_prompt},
+                    {"role": "system", "content": DECISION_TREE_SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.1,
@@ -452,6 +462,22 @@ NEVER return empty objects or incomplete routing structures. Every route must be
         tree.total_paths = self._count_paths(tree.root_node)
         tree.max_depth = self._calculate_depth(tree.root_node)
 
+        # Validate tree structure and routing
+        logger.debug(f"Validating aggregator tree structure for policy {policy.policy_id}...")
+        validation_result = validate_tree_structure(tree)
+
+        # Populate validation fields
+        tree.has_complete_routing = validation_result["has_complete_routing"]
+        tree.unreachable_nodes = validation_result["unreachable_nodes"]
+        tree.incomplete_routes = validation_result["incomplete_routes"]
+        tree.total_outcomes = validation_result["outcome_nodes"]
+
+        if not tree.has_complete_routing:
+            logger.warning(
+                f"Aggregator tree for policy {policy.policy_id} has incomplete routing - "
+                f"Unreachable: {len(tree.unreachable_nodes)}, Incomplete routes: {len(tree.incomplete_routes)}"
+            )
+
         return tree
 
     @retry(
@@ -471,16 +497,21 @@ NEVER return empty objects or incomplete routing structures. Every route must be
         # Get context
         context = self.aggregator.get_policy_context(policy, self.generation_plan)
 
-        # Create specialized prompt for leaf trees
-        prompt = self._create_leaf_prompt(policy, context)
+        # Create specialized prompt for leaf trees using enhanced template
+        parent_context_str = context.get("navigation_hint", "")
+        prompt = get_leaf_prompt(
+            policy_title=policy.title,
+            policy_description=policy.description,
+            policy_level=policy.level,
+            conditions=policy.conditions,
+            parent_context=parent_context_str,
+            context=str(context)
+        )
 
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=[
-                {
-                    "role": "system",
-                    "content": "You are an expert at converting specific policy requirements into clear, actionable decision trees with eligibility questions. Create comprehensive trees that cover all policy conditions.",
-                },
+                {"role": "system", "content": DECISION_TREE_SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
             temperature=0.1,
@@ -508,6 +539,22 @@ NEVER return empty objects or incomplete routing structures. Every route must be
         tree.total_nodes = self._count_nodes(tree.root_node)
         tree.total_paths = self._count_paths(tree.root_node)
         tree.max_depth = self._calculate_depth(tree.root_node)
+
+        # Validate tree structure and routing
+        logger.debug(f"Validating leaf tree structure for policy {policy.policy_id}...")
+        validation_result = validate_tree_structure(tree)
+
+        # Populate validation fields
+        tree.has_complete_routing = validation_result["has_complete_routing"]
+        tree.unreachable_nodes = validation_result["unreachable_nodes"]
+        tree.incomplete_routes = validation_result["incomplete_routes"]
+        tree.total_outcomes = validation_result["outcome_nodes"]
+
+        if not tree.has_complete_routing:
+            logger.warning(
+                f"Leaf tree for policy {policy.policy_id} has incomplete routing - "
+                f"Unreachable: {len(tree.unreachable_nodes)}, Incomplete routes: {len(tree.incomplete_routes)}"
+            )
 
         return tree
 
@@ -785,10 +832,19 @@ Be thorough and create a complete decision tree that handles ALL scenarios."""
         Returns:
             DecisionTree object
         """
+        logger.debug(f"[_parse_tree_result] Parsing tree result for policy: {policy.policy_id}")
         root_node_data = result.get("root_node", {})
+        logger.debug(f"[_parse_tree_result] Root node data keys: {list(root_node_data.keys()) if root_node_data else 'None'}")
 
         # Parse the root node recursively
+        logger.debug(f"[_parse_tree_result] Parsing root node...")
         root_node = self._parse_node(root_node_data)
+        logger.debug(f"[_parse_tree_result] Root node parsed - type: {root_node.node_type}, has_question: {root_node.question is not None}, children: {len(root_node.children)}")
+
+        # Extract all questions from the tree into a flat list
+        logger.debug(f"[_parse_tree_result] Extracting questions from tree...")
+        questions = self._extract_questions(root_node)
+        logger.info(f"[_parse_tree_result] Extracted {len(questions)} questions from tree for policy {policy.policy_id}")
 
         # Create tree
         tree = DecisionTree(
@@ -796,12 +852,14 @@ Be thorough and create a complete decision tree that handles ALL scenarios."""
             policy_id=policy.policy_id,
             policy_title=policy.title,
             root_node=root_node,
+            questions=questions,  # Populate the questions list
             total_nodes=0,  # Will be calculated
             total_paths=0,  # Will be calculated
             max_depth=0,  # Will be calculated
             confidence_score=root_node.confidence_score,
         )
 
+        logger.debug(f"[_parse_tree_result] DecisionTree created with {len(tree.questions)} questions")
         return tree
 
     def _parse_node(self, node_data: Dict[str, Any]) -> DecisionNode:
@@ -816,7 +874,7 @@ Be thorough and create a complete decision tree that handles ALL scenarios."""
         """
         # Validate node data
         if not node_data:
-            logger.warning("Empty node data received from LLM, creating stub outcome node")
+            logger.warning("[_parse_node] Empty node data received from LLM, creating stub outcome node")
             return DecisionNode(
                 node_id=str(uuid.uuid4()),
                 node_type="outcome",
@@ -829,6 +887,7 @@ Be thorough and create a complete decision tree that handles ALL scenarios."""
             )
 
         node_type = node_data.get("node_type", "question")
+        logger.debug(f"[_parse_node] Parsing node - node_type: {node_type}, node_id: {node_data.get('node_id', 'None')}")
 
         # Parse question if present
         question = None
@@ -838,7 +897,7 @@ Be thorough and create a complete decision tree that handles ALL scenarios."""
         if node_type == "question":
             if "question" not in node_data or not node_data["question"]:
                 logger.warning(
-                    f"Question node missing 'question' field in node {node_data.get('node_id', 'unknown')}. "
+                    f"[_parse_node] Question node missing 'question' field in node {node_data.get('node_id', 'unknown')}. "
                     "Converting to outcome node."
                 )
                 # Convert to outcome node rather than failing
@@ -846,13 +905,16 @@ Be thorough and create a complete decision tree that handles ALL scenarios."""
                 outcome = "Incomplete policy data - manual review required"
                 outcome_type = "refer_to_manual"
             else:
+                logger.debug(f"[_parse_node] Parsing question for node {node_data.get('node_id', 'unknown')}")
                 question = self._parse_question(node_data["question"])
+                logger.debug(f"[_parse_node] Question parsed: '{question.question_text[:50]}...' (type: {question.question_type})")
 
         # Get outcome data if outcome node
         if node_type == "outcome":
             if outcome is None:  # Not already set from conversion above
                 outcome = node_data.get("outcome", "No outcome specified")
                 outcome_type = node_data.get("outcome_type", "refer_to_manual")
+            logger.debug(f"[_parse_node] Outcome node: {outcome[:50]}... (type: {outcome_type})")
 
         # Parse children recursively
         children = {}
@@ -908,11 +970,16 @@ Be thorough and create a complete decision tree that handles ALL scenarios."""
         Returns:
             EligibilityQuestion object
         """
+        logger.debug(f"[_parse_question] Parsing question data with keys: {list(question_data.keys())}")
+        logger.debug(f"[_parse_question] Question text: '{question_data.get('question_text', 'N/A')[:100]}...'")
+
         # Parse question type
         question_type_str = question_data.get("question_type", "yes_no")
         try:
             question_type = QuestionType(question_type_str)
+            logger.debug(f"[_parse_question] Question type: {question_type}")
         except ValueError:
+            logger.warning(f"[_parse_question] Invalid question type '{question_type_str}', defaulting to YES_NO")
             question_type = QuestionType.YES_NO
 
         # Parse options if multiple choice
@@ -1012,6 +1079,34 @@ Be thorough and create a complete decision tree that handles ALL scenarios."""
             max_child_depth = max(max_child_depth, child_depth)
 
         return max_child_depth
+
+    def _extract_questions(self, node: DecisionNode, questions: List[EligibilityQuestion] = None) -> List[EligibilityQuestion]:
+        """
+        Extract all questions from the decision tree into a flat list.
+
+        Args:
+            node: Current DecisionNode
+            questions: Accumulated questions list
+
+        Returns:
+            List of all EligibilityQuestion objects in the tree
+        """
+        if questions is None:
+            questions = []
+            logger.debug(f"[_extract_questions] Starting question extraction from tree")
+
+        # If this node has a question, add it to the list
+        if node.question is not None:
+            questions.append(node.question)
+            logger.debug(f"[_extract_questions] Found question: '{node.question.question_text[:50]}...' (type: {node.question.question_type})")
+
+        # Recursively extract questions from all children
+        for answer, child_node in node.children.items():
+            logger.debug(f"[_extract_questions] Traversing child for answer '{answer}'")
+            self._extract_questions(child_node, questions)
+
+        logger.debug(f"[_extract_questions] Extraction complete. Total questions found: {len(questions)}")
+        return questions
 
     async def optimize_tree(self, tree: DecisionTree) -> DecisionTree:
         """

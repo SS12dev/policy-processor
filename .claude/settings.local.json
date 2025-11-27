@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(dir /b .env*)"
+      "Bash(dir /b .env*)",
+      "Bash(dir:*)",
+      "Bash(move:*)",
+      "Bash(redis-cli:*)",
+      "Bash(python -c:*)"
     ],
     "deny": [],
     "ask": []

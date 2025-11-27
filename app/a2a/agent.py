@@ -1,14 +1,17 @@
 """
-A2A Agent for Policy Document Processing.
+A2A Agent for Policy Document Processing - Stateless Redis-based version.
 
-This agent provides a single unified endpoint for processing policy documents
-with full streaming support and direct orchestrator integration.
+This agent:
+- Uses Redis for temporary storage (no database)
+- Returns full results in A2A response
+- Supports concurrent requests
+- Designed for containerized deployment
 """
 
 import json
 import base64
 import hashlib
-from typing import Dict, Any, Optional, AsyncIterator
+from typing import Dict, Any
 from datetime import datetime
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
@@ -17,7 +20,7 @@ from a2a.types import Message, TextPart, Role
 from typing_extensions import override
 
 from app.utils.logger import get_logger
-from app.database.operations import DatabaseOperations
+from app.a2a.redis_storage import RedisAgentStorage
 from app.core.langgraph_orchestrator import LangGraphOrchestrator
 from app.models.schemas import ProcessingRequest
 
@@ -26,22 +29,26 @@ logger = get_logger(__name__)
 
 class PolicyProcessorAgent(AgentExecutor):
     """
-    A2A Agent with a single processing endpoint.
+    Stateless A2A Agent with Redis-based temporary storage.
 
-    This agent handles all policy document processing with streaming support.
+    Designed for:
+    - Container deployment
+    - Horizontal scaling
+    - Concurrent request handling
+    - No persistent database at agent layer
     """
 
-    def __init__(self, db_ops: DatabaseOperations, orchestrator: LangGraphOrchestrator):
+    def __init__(self, orchestrator: LangGraphOrchestrator, redis_storage: RedisAgentStorage):
         """
         Initialize the agent.
 
         Args:
-            db_ops: Database operations instance
             orchestrator: LangGraph-based policy processing orchestrator
+            redis_storage: Redis storage for temporary state
         """
-        self.db_ops = db_ops
         self.orchestrator = orchestrator
-        logger.info("PolicyProcessorAgent initialized with LangGraph orchestrator")
+        self.storage = redis_storage
+        logger.info("PolicyProcessorAgent initialized (stateless, Redis-based)")
 
     @override
     async def execute(
@@ -57,54 +64,26 @@ class PolicyProcessorAgent(AgentExecutor):
             event_queue: Queue for sending responses back to the client
         """
         try:
-            logger.info(f"[AGENT] ========== Processing A2A Request ==========")
-            logger.info(f"[AGENT] Task ID: {context.task_id}")
-            logger.info(f"[AGENT] Context ID: {getattr(context, 'context_id', 'N/A')}")
-            logger.info(f"[AGENT] Context type: {type(context).__name__}")
-            logger.info(f"[AGENT] Context attributes: {[a for a in dir(context) if not a.startswith('_')]}")
-
-            # Log metadata if available
-            if hasattr(context, 'metadata') and context.metadata:
-                logger.info(f"[AGENT] Request metadata: {context.metadata}")
-                logger.info(f"[AGENT] Metadata keys: {list(context.metadata.keys()) if isinstance(context.metadata, dict) else 'not a dict'}")
-
-            # Log user input
-            user_input = context.get_user_input() if hasattr(context, 'get_user_input') else None
-            if user_input:
-                logger.info(f"[AGENT] User input (first 200 chars): {user_input[:200]}")
-            else:
-                logger.info(f"[AGENT] No user input available")
+            logger.info(f"[AGENT] Processing A2A request - Task: {context.task_id}")
 
             # Extract parameters from context
-            logger.info(f"[AGENT] Extracting parameters from context...")
             parameters = self._extract_parameters(context)
-            logger.info(f"[AGENT] Extracted parameter keys: {list(parameters.keys()) if parameters else 'None'}")
-            if parameters:
-                # Log parameter sizes without logging full base64 content
-                param_info = {}
-                for key, value in parameters.items():
-                    if key == "document_base64":
-                        param_info[key] = f"<base64 data, {len(value) if isinstance(value, str) else 0} chars>"
-                    else:
-                        param_info[key] = value
-                logger.info(f"[AGENT] Parameter details: {param_info}")
+            logger.info(f"[AGENT] Parameters: {self._sanitize_params_for_log(parameters)}")
 
-            # Check if this is a document processing request
+            # Route to appropriate handler
             if "document_base64" in parameters:
                 await self._process_document(context, event_queue, parameters)
             elif "job_id" in parameters and not parameters.get("document_base64"):
-                # Get results for existing job
                 await self._get_results(context, event_queue, parameters["job_id"])
             else:
-                # Invalid request
                 await self._send_error(
                     context,
                     event_queue,
-                    "Invalid request. Please provide either 'document_base64' to process a new document or 'job_id' to get results."
+                    "Invalid request. Provide 'document_base64' or 'job_id'."
                 )
 
         except Exception as e:
-            logger.error(f"Error executing A2A request: {e}", exc_info=True)
+            logger.error(f"Error executing request: {e}", exc_info=True)
             await self._send_error(context, event_queue, str(e))
 
     async def _process_document(
@@ -113,129 +92,125 @@ class PolicyProcessorAgent(AgentExecutor):
         event_queue: EventQueue,
         parameters: Dict[str, Any]
     ) -> None:
-        """Process a policy document."""
+        """Process a policy document with Redis-based state management."""
+        job_id = context.task_id  # Use task_id as job_id
+
         try:
-            logger.info(f"[AGENT] ========== Starting Document Processing ==========")
-            logger.info(f"[AGENT] Task ID: {context.task_id}")
-
-            # Extract parameters
-            document_base64 = parameters["document_base64"]
-            use_gpt4 = parameters.get("use_gpt4", False)
-            enable_streaming = parameters.get("enable_streaming", True)
-            confidence_threshold = parameters.get("confidence_threshold", 0.7)
-
-            logger.info(f"[AGENT] Processing options: use_gpt4={use_gpt4}, streaming={enable_streaming}, threshold={confidence_threshold}")
-            logger.info(f"[AGENT] Document base64 length: {len(document_base64)} chars")
-
-            # Validate and decode document
-            try:
-                pdf_bytes = base64.b64decode(document_base64)
-                logger.info(f"[AGENT] Successfully decoded PDF: {len(pdf_bytes)} bytes")
-            except Exception as e:
-                await self._send_error(context, event_queue, f"Invalid base64 encoding: {str(e)}")
-                return
-
-            # Calculate document hash for deduplication
-            doc_hash = hashlib.sha256(pdf_bytes).hexdigest()
-
-            logger.info(f"[AGENT] Document hash: {doc_hash[:16]}...")
-            logger.info(f"[AGENT] Creating processing request with base64 string")
-
-            # Create processing request (ProcessingRequest expects base64 string)
-            request = ProcessingRequest(
-                document=document_base64,  # Pass base64 string as expected by schema
-                processing_options={
-                    "use_gpt4": use_gpt4,
-                    "enable_streaming": enable_streaming,
-                    "confidence_threshold": confidence_threshold,
-                }
-            )
-
-            logger.info(f"[AGENT] Processing request created successfully")
-            logger.info(f"[AGENT] Calling LangGraph orchestrator...")
-
-            # Process the document (no initial acknowledgment - send only final result)
-            # The A2A protocol closes the queue after the first message,
-            # so we wait for complete processing before sending any response
-            response = await self.orchestrator.process_document(request)
-
-            # Save to database
-            job_data = {
-                "job_id": response.job_id,
-                "status": response.status.value,
-                "document_type": response.metadata.document_type.value if hasattr(response.metadata, 'document_type') else "unknown",
-                "created_at": datetime.utcnow(),
-                "started_at": datetime.utcnow(),
-                "use_gpt4": use_gpt4,
-                "enable_streaming": enable_streaming,
-                "confidence_threshold": confidence_threshold,
-            }
-
-            # Add document data
-            document_data = {
-                "job_id": response.job_id,
-                "content_base64": document_base64,
-                "document_hash": doc_hash,
-                "file_size_bytes": len(pdf_bytes),
-                "mime_type": "application/pdf",
-                "uploaded_at": datetime.utcnow(),
-            }
-
-            # Save job and document
-            self.db_ops.save_job(job_data)
-            self.db_ops.save_document(document_data)
-
-            # If completed, save results
-            if response.status.value == "completed":
-                job_data["completed_at"] = datetime.utcnow()
-                job_data["status"] = "completed"
-
-                # Extract statistics
-                if hasattr(response, 'metadata'):
-                    job_data["total_pages"] = getattr(response.metadata, 'total_pages', None)
-
-                if hasattr(response, 'policy_hierarchy'):
-                    job_data["total_policies"] = response.policy_hierarchy.total_policies
-
-                if hasattr(response, 'decision_trees'):
-                    job_data["total_decision_trees"] = len(response.decision_trees)
-
-                if hasattr(response, 'validation_result'):
-                    job_data["validation_confidence"] = response.validation_result.overall_confidence
-                    job_data["validation_passed"] = response.validation_result.is_valid
-
-                # Update job
-                self.db_ops.update_job(response.job_id, job_data)
-
-                # Save results
-                results_data = response.dict()
-                self.db_ops.save_results(response.job_id, results_data)
-
-                # Send completion message
-                validation_status = "Passed" if hasattr(response, 'validation_result') and response.validation_result.is_valid else "Failed"
-                message = (
-                    f"Processing complete!\n\n"
-                    f"**Job ID:** `{response.job_id}`\n"
-                    f"**Status:** {response.status.value}\n"
-                    f"**Total Policies:** {response.policy_hierarchy.total_policies if hasattr(response, 'policy_hierarchy') else 'N/A'}\n"
-                    f"**Decision Trees:** {len(response.decision_trees) if hasattr(response, 'decision_trees') else 'N/A'}\n"
-                    f"**Validation:** {validation_status}\n"
-                )
-                await self._send_message(context, event_queue, message)
-
-            elif response.status.value == "failed":
-                job_data["status"] = "failed"
-                job_data["error_message"] = getattr(response, 'error_message', 'Unknown error')
-                self.db_ops.update_job(response.job_id, job_data)
-
+            # Acquire lock to prevent duplicate processing
+            if not self.storage.acquire_lock(job_id, timeout_seconds=600):
                 await self._send_error(
                     context,
                     event_queue,
-                    f"Processing failed: {getattr(response, 'error_message', 'Unknown error')}"
+                    f"Job {job_id} is already being processed"
+                )
+                return
+
+            # Increment active jobs counter
+            active_count = self.storage.increment_active_jobs()
+            logger.info(f"[AGENT] Active jobs: {active_count}")
+
+            try:
+                # Extract and validate parameters
+                document_base64 = parameters["document_base64"]
+                use_gpt4 = parameters.get("use_gpt4", False)
+                enable_streaming = parameters.get("enable_streaming", True)
+                confidence_threshold = parameters.get("confidence_threshold", 0.7)
+
+                logger.info(f"[AGENT] Job {job_id}: Starting processing")
+                logger.info(f"[AGENT] Options: GPT-4={use_gpt4}, Streaming={enable_streaming}, Threshold={confidence_threshold}")
+
+                # Validate document
+                try:
+                    pdf_bytes = base64.b64decode(document_base64)
+                    doc_hash = hashlib.sha256(pdf_bytes).hexdigest()
+                    logger.info(f"[AGENT] Document: {len(pdf_bytes)} bytes, hash: {doc_hash[:16]}...")
+                except Exception as e:
+                    await self._send_error(context, event_queue, f"Invalid base64: {str(e)}")
+                    return
+
+                # Save initial status to Redis
+                self.storage.save_job_status(job_id, {
+                    "status": "processing",
+                    "started_at": datetime.utcnow().isoformat(),
+                    "document_hash": doc_hash,
+                    "use_gpt4": use_gpt4
+                }, ttl_hours=1)
+
+                # Create processing request
+                request = ProcessingRequest(
+                    document=document_base64,
+                    processing_options={
+                        "use_gpt4": use_gpt4,
+                        "enable_streaming": enable_streaming,
+                        "confidence_threshold": confidence_threshold,
+                    }
                 )
 
+                # Process document
+                logger.info(f"[AGENT] Job {job_id}: Calling orchestrator")
+                response = await self.orchestrator.process_document(request, job_id=job_id)
+
+                # Prepare result data
+                result_data = response.model_dump(mode='json')
+                result_data["document_hash"] = doc_hash
+                result_data["processing_completed_at"] = datetime.utcnow().isoformat()
+
+                # Save result to Redis (with TTL)
+                self.storage.save_job_result(job_id, result_data)
+
+                # Update status
+                self.storage.save_job_status(job_id, {
+                    "status": "completed",
+                    "completed_at": datetime.utcnow().isoformat(),
+                    "total_policies": result_data.get("policy_hierarchy", {}).get("total_policies", 0),
+                    "validation_passed": result_data.get("validation_result", {}).get("is_valid", False)
+                }, ttl_hours=24)
+
+                # Save metrics
+                self.storage.save_processing_metrics({
+                    "job_id": job_id,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "duration_seconds": result_data.get("processing_stats", {}).get("processing_time_seconds", 0),
+                    "total_policies": result_data.get("policy_hierarchy", {}).get("total_policies", 0),
+                    "use_gpt4": use_gpt4
+                })
+
+                # Send result in A2A response
+                validation_status = "Passed" if response.validation_result.is_valid else "Failed"
+                message_text = (
+                    f"Processing complete!\n\n"
+                    f"**Job ID:** `{job_id}`\n"
+                    f"**Status:** completed\n"
+                    f"**Total Policies:** {response.policy_hierarchy.total_policies}\n"
+                    f"**Decision Trees:** {len(response.decision_trees)}\n"
+                    f"**Validation:** {validation_status}\n\n"
+                    f"**Full Results (JSON):**\n```json\n{json.dumps(result_data, indent=2, default=str)}\n```"
+                )
+
+                await self._send_message(context, event_queue, message_text)
+
+                logger.info(f"[AGENT] Job {job_id}: Completed successfully")
+
+            finally:
+                # Release lock and decrement counter
+                self.storage.release_lock(job_id)
+                active_count = self.storage.decrement_active_jobs()
+                logger.info(f"[AGENT] Active jobs: {active_count}")
+
         except Exception as e:
-            logger.error(f"Error processing document: {e}", exc_info=True)
+            logger.error(f"[AGENT] Job {job_id}: Processing error: {e}", exc_info=True)
+
+            # Update status to failed
+            self.storage.save_job_status(job_id, {
+                "status": "failed",
+                "error": str(e),
+                "failed_at": datetime.utcnow().isoformat()
+            }, ttl_hours=24)
+
+            # Release lock
+            self.storage.release_lock(job_id)
+            self.storage.decrement_active_jobs()
+
             await self._send_error(context, event_queue, f"Processing error: {str(e)}")
 
     async def _get_results(
@@ -244,17 +219,32 @@ class PolicyProcessorAgent(AgentExecutor):
         event_queue: EventQueue,
         job_id: str
     ) -> None:
-        """Get results for a job."""
+        """Get results for a job from Redis."""
         try:
-            results = self.db_ops.get_results(job_id)
+            logger.info(f"[AGENT] Retrieving results for job {job_id}")
 
-            if not results:
-                await self._send_error(context, event_queue, f"Job {job_id} not found")
+            # Get result from Redis
+            result_data = self.storage.get_job_result(job_id)
+
+            if not result_data:
+                # Check if job exists
+                status = self.storage.get_job_status(job_id)
+                if status:
+                    status_msg = status.get("status", "unknown")
+                    await self._send_message(
+                        context,
+                        event_queue,
+                        f"Job {job_id} status: {status_msg}. Results not yet available or expired."
+                    )
+                else:
+                    await self._send_error(context, event_queue, f"Job {job_id} not found")
                 return
 
-            # Format response
-            response_text = json.dumps(results, indent=2, default=str)
-            await self._send_message(context, event_queue, response_text)
+            # Format and send results
+            response_text = json.dumps(result_data, indent=2, default=str)
+            await self._send_message(context, event_queue, f"Results for job {job_id}:\n\n```json\n{response_text}\n```")
+
+            logger.info(f"[AGENT] Results sent for job {job_id}")
 
         except Exception as e:
             logger.error(f"Error getting results: {e}", exc_info=True)
@@ -274,7 +264,7 @@ class PolicyProcessorAgent(AgentExecutor):
             task_id=context.task_id,
             context_id=context.context_id
         )
-        await event_queue.enqueue_event(message)  # Must await async call
+        await event_queue.enqueue_event(message)
 
     async def _send_error(
         self,
@@ -283,7 +273,7 @@ class PolicyProcessorAgent(AgentExecutor):
         error_message: str
     ) -> None:
         """Send an error message."""
-        logger.error(f"[AGENT] Sending error: {error_message}")
+        logger.error(f"[AGENT] Error: {error_message}")
         message = Message(
             message_id=f"msg_error_{context.task_id}",
             role=Role.agent,
@@ -291,7 +281,7 @@ class PolicyProcessorAgent(AgentExecutor):
             task_id=context.task_id,
             context_id=context.context_id
         )
-        await event_queue.enqueue_event(message)  # Must await async call
+        await event_queue.enqueue_event(message)
 
     @override
     async def cancel(
@@ -305,25 +295,24 @@ class PolicyProcessorAgent(AgentExecutor):
         message = Message(
             message_id=f"msg_cancel_{context.task_id}",
             role=Role.agent,
-            parts=[TextPart(text="WARNING: Task cancellation is not currently supported. Jobs will continue to completion.")],
+            parts=[TextPart(text="WARNING: Task cancellation not supported. Job will continue.")],
             task_id=context.task_id,
             context_id=context.context_id
         )
-        await event_queue.enqueue_event(message)  # Must await async call
+        await event_queue.enqueue_event(message)
 
     def _extract_parameters(self, context: RequestContext) -> Dict[str, Any]:
         """Extract parameters from the request context."""
         try:
-            # Try to get from metadata
+            # Try metadata first
             if hasattr(context, 'metadata') and context.metadata:
                 params = context.metadata.get('parameters', {})
                 if params:
                     return params
 
-            # Try to parse from user message
+            # Try to parse user input as JSON
             user_input = context.get_user_input()
             if user_input:
-                # Try to parse as JSON
                 try:
                     return json.loads(user_input)
                 except json.JSONDecodeError:
@@ -333,3 +322,13 @@ class PolicyProcessorAgent(AgentExecutor):
         except Exception as e:
             logger.error(f"Error extracting parameters: {e}")
             return {}
+
+    def _sanitize_params_for_log(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Sanitize parameters for logging (hide large base64 data)."""
+        sanitized = {}
+        for key, value in params.items():
+            if key == "document_base64" and isinstance(value, str):
+                sanitized[key] = f"<base64, {len(value)} chars>"
+            else:
+                sanitized[key] = value
+        return sanitized

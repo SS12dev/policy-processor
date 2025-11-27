@@ -14,7 +14,7 @@ from a2a.server.tasks import InMemoryTaskStore
 
 from app.utils.logger import get_logger
 from app.a2a.agent import PolicyProcessorAgent
-from app.database.operations import DatabaseOperations
+from app.a2a.redis_storage import RedisAgentStorage
 from app.core.langgraph_orchestrator import LangGraphOrchestrator
 
 logger = get_logger(__name__)
@@ -33,8 +33,8 @@ def create_agent_card(host: str = "0.0.0.0", port: int = 8001) -> dict:
     """
     return {
         "name": "Policy Document Processor Agent",
-        "version": "3.0.0",
-        "description": "Process policy documents (PDFs) and generate hierarchical decision trees with eligibility questions. Powered by LangGraph state machine with single unified endpoint and streaming support.",
+        "version": "4.0.0",
+        "description": "Stateless policy document processor with Redis-based temporary storage. Processes PDFs and generates hierarchical decision trees with eligibility questions. Powered by LangGraph state machine. Designed for container deployment and horizontal scaling.",
         "url": f"http://{host}:{port}",
         "capabilities": {
             "streaming": True,
@@ -106,17 +106,22 @@ def create_agent_card(host: str = "0.0.0.0", port: int = 8001) -> dict:
                 }
             }
         ],
-        "privacy_policy": "All documents stored locally. No external sharing.",
+        "privacy_policy": "Results stored temporarily in Redis with TTL. No persistent storage at agent layer.",
         "terms_of_service": "For authorized use only.",
         "metadata": {
-            "framework": "A2A SDK + LangGraph + Python",
-            "architecture": "LangGraph state machine with 8 nodes and conditional routing",
+            "framework": "A2A SDK + LangGraph + Python + Redis",
+            "architecture": "Stateless LangGraph state machine with 8 nodes, Redis temporary storage, container-ready",
             "llm_models": ["gpt-4o", "gpt-4o-mini"],
+            "storage": "Redis with TTL (24h default)",
+            "deployment": "Container-friendly, horizontally scalable",
             "features": [
                 "langgraph_state_machine",
+                "stateless_architecture",
+                "redis_temporary_storage",
+                "concurrent_requests",
+                "job_locking",
                 "single_endpoint",
                 "streaming_support",
-                "pdf_storage",
                 "decision_trees",
                 "validation",
                 "automatic_retry_logic"
@@ -126,7 +131,7 @@ def create_agent_card(host: str = "0.0.0.0", port: int = 8001) -> dict:
 
 
 def create_a2a_server(
-    db_ops: DatabaseOperations,
+    redis_storage: RedisAgentStorage,
     host: str = "0.0.0.0",
     port: int = 8001
 ):
@@ -134,7 +139,7 @@ def create_a2a_server(
     Create the A2A server.
 
     Args:
-        db_ops: Database operations instance
+        redis_storage: Redis storage for temporary state
         host: Host to bind to
         port: Port to bind to
 
@@ -147,8 +152,8 @@ def create_a2a_server(
         # Create LangGraph orchestrator
         orchestrator = LangGraphOrchestrator()
 
-        # Create the agent executor
-        agent_executor = PolicyProcessorAgent(db_ops, orchestrator)
+        # Create the agent executor (stateless, Redis-based)
+        agent_executor = PolicyProcessorAgent(orchestrator, redis_storage)
 
         # Create task store
         task_store = InMemoryTaskStore()
@@ -186,7 +191,9 @@ def create_a2a_server(
             return JSONResponse({
                 "status": "healthy",
                 "service": "policy-processor-a2a",
-                "version": "3.0.0",
+                "version": "4.0.0",
+                "architecture": "stateless",
+                "storage": "redis",
                 "langgraph": "active"
             })
 
@@ -213,31 +220,29 @@ def create_a2a_server(
 
 
 def run_a2a_server(
-    db_path: str = "./data/policy_processor.db",
     host: str = "0.0.0.0",
     port: int = 8001,
-    reload: bool = False
+    reload: bool = False,
+    result_ttl_hours: int = 24
 ):
     """
     Run the A2A server.
 
     Args:
-        db_path: Path to SQLite database
         host: Host to bind to
         port: Port to bind to
         reload: Enable auto-reload for development
+        result_ttl_hours: Hours to keep results in Redis (default: 24)
     """
     try:
         import uvicorn
 
-        # Initialize database
-        db_path_obj = Path(db_path)
-        db_path_obj.parent.mkdir(parents=True, exist_ok=True)
-
-        db_ops = DatabaseOperations(database_url=f"sqlite:///{db_path}")
+        # Initialize Redis storage (stateless, container-friendly)
+        redis_storage = RedisAgentStorage(result_ttl_hours=result_ttl_hours)
+        logger.info(f"Redis storage initialized with {result_ttl_hours}h TTL")
 
         # Create the app
-        app = create_a2a_server(db_ops, host, port)
+        app = create_a2a_server(redis_storage, host, port)
 
         if app is None:
             logger.error("Failed to create A2A app. Exiting.")
@@ -268,8 +273,8 @@ def run_a2a_server(
 
 if __name__ == "__main__":
     run_a2a_server(
-        db_path="./data/policy_processor.db",
         host="0.0.0.0",
         port=8001,
-        reload=True
+        reload=True,
+        result_ttl_hours=24
     )

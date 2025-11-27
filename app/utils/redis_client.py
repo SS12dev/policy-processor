@@ -18,6 +18,11 @@ class RedisClient:
         self._client = None
         self._connect()
 
+    @property
+    def client(self):
+        """Get the underlying Redis client."""
+        return self._client
+
     def _connect(self):
         """Establish Redis connection."""
         try:

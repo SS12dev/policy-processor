@@ -22,6 +22,7 @@ class ProcessingJob(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     job_id = Column(String(100), unique=True, nullable=False, index=True)
+    policy_name = Column(String(200), unique=True, nullable=False, index=True)  # User-provided unique policy name
     status = Column(String(50), nullable=False, index=True)  # submitted, processing, completed, failed
     document_type = Column(String(100))  # insurance_policy, legal_document, etc.
 
@@ -69,6 +70,7 @@ class PolicyDocument(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     job_id = Column(String(100), ForeignKey('processing_jobs.job_id'), unique=True, nullable=False)
+    policy_name = Column(String(200), nullable=False, index=True)  # User-provided policy name
 
     # Document metadata
     filename = Column(String(500))
@@ -105,6 +107,7 @@ class ProcessingResult(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     job_id = Column(String(100), ForeignKey('processing_jobs.job_id'), unique=True, nullable=False)
+    policy_name = Column(String(200), nullable=False, index=True)  # User-provided policy name
 
     # Complete results as JSON
     policy_hierarchy_json = Column(JSON)  # Complete policy hierarchy

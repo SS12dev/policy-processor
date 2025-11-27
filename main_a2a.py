@@ -15,25 +15,26 @@ logger = get_logger(__name__)
 def main():
     """Run the A2A server."""
     logger.info("=" * 80)
-    logger.info("Policy Document Processor - A2A Server")
+    logger.info("Policy Document Processor - A2A Server (Stateless)")
     logger.info("=" * 80)
 
     # Configuration
-    db_path = "./data/policy_processor.db"
     host = "0.0.0.0"
     port = 8001
     reload = False  # Set to True for development auto-reload
+    result_ttl_hours = 24  # Redis TTL for results
 
-    logger.info(f"Database: {db_path}")
     logger.info(f"Server: http://{host}:{port}")
+    logger.info(f"Storage: Redis (TTL: {result_ttl_hours}h)")
+    logger.info(f"Architecture: Stateless, container-ready")
     logger.info("=" * 80)
 
     # Run the server
     run_a2a_server(
-        db_path=db_path,
         host=host,
         port=port,
-        reload=reload
+        reload=reload,
+        result_ttl_hours=result_ttl_hours
     )
 
 

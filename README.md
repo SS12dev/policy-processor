@@ -1,341 +1,390 @@
 # Policy Document Processor
 
-AI-powered policy document processor that extracts policies, generates decision trees, and validates structure using A2A protocol.
+Advanced LangGraph-powered system for processing policy documents into structured decision trees with conditional routing, interactive visualization, and comprehensive editing capabilities.
 
-## Features
+## Key Features
 
-- **Single A2A Endpoint** - Unified policy processing via A2A protocol
-- **PDF Storage** - Original documents stored for review
-- **Decision Trees** - Automatic generation with eligibility questions
-- **Streaming Support** - Backend-controlled real-time progress updates
-- **Side-by-Side Review** - View PDFs alongside generated decision trees
-- **2-Tab Interface** - Clean Streamlit UI for upload and review
+### Decision Trees with Conditional Routing
+- Explicit routing rules for every question and answer path
+- Support for yes/no, multiple-choice, and numeric range questions
+- AND/OR logic grouping for complex policy conditions
+- Complete path coverage validation
+- Multiple outcome types: approved, denied, review, documentation required
+
+### Interactive Tile-Based Visualization
+- Vertical tree layout with indentation showing hierarchy
+- Color-coded nodes by type (questions, decisions, outcomes)
+- Collapsible branches for easy navigation
+- Answer labels showing conditional flow
+- Path highlighting and tracing
+- Side-by-side PDF comparison
+
+### Full Editing Capabilities
+- Visual tree editor with inline editing
+- Add, remove, and reorder nodes
+- Configure routing rules through GUI
+- Path validation and completeness checking
+- Bulk operations and import/export
+
+### Intelligent Processing
+- Semantic-aware document chunking
+- Hierarchical policy extraction
+- Confidence-based validation
+- Automatic retry for low-confidence sections
+- Source reference tracking
 
 ## Quick Start
 
 ### Prerequisites
-
-1. Python 3.11+
-2. OpenAI API key
-3. Redis server (optional, for caching)
+- Python 3.10+
+- OpenAI API key
+- Redis server
+- Tesseract OCR (optional, for scanned PDFs)
 
 ### Installation
 
 ```bash
+# Clone and setup
+git clone <repository-url>
+cd policy-processor
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+
 # Install dependencies
 pip install -r requirements.txt
 
-# Set OpenAI API key
-export OPENAI_API_KEY="sk-..."
+# Configure environment
+cp .env.example .env
+# Edit .env with:
+# - OPENAI_API_KEY=your-key
+# - REDIS_HOST=localhost
+# - REDIS_PORT=6379
+
+# Start Redis
+redis-server
+
+# Run migrations
+python migrate_add_policy_name.py
 ```
 
 ### Running the Application
 
-**Step 1: Start the A2A Server**
-
+**Terminal 1 - Start A2A Server:**
 ```bash
-python main_a2a_simplified.py
+python main_a2a.py
 ```
+Server available at http://localhost:8001
 
-Server will be available at:
-- Agent endpoint: `http://localhost:8001`
-- Agent card: `http://localhost:8001/.well-known/agent-card`
-- Health check: `http://localhost:8001/health`
-
-**Step 2: Start the Streamlit UI** (in a new terminal)
-
+**Terminal 2 - Start Streamlit UI:**
 ```bash
-python main_streamlit_simplified.py
+streamlit run app/streamlit_app/app.py
 ```
+UI available at http://localhost:8501
 
-UI will open at: `http://localhost:8501`
+## Usage Guide
 
-### Usage
+### Processing a Policy Document
 
 1. **Upload & Process Tab**
-   - Upload PDF policy document
-   - Configure processing options:
-     - Use GPT-4 (higher accuracy, slower)
-     - Enable streaming (real-time updates)
-     - Set confidence threshold (0.0-1.0)
+   - Enter unique policy name
+   - Upload PDF document
+   - Configure options:
+     - Use GPT-4 for complex sections
+     - Set confidence threshold (default: 0.7)
    - Click "Process Document"
-   - Wait for completion (2-10 minutes)
+   - Monitor real-time progress
 
-2. **Review Decision Trees Tab**
-   - Enter Job ID (auto-populated from processing)
-   - Click "Load Results"
-   - Choose view mode:
-     - Decision Trees Only
-     - Side-by-Side (PDF + Trees)
-   - Explore results and export as JSON
+2. **View Generated Trees**
+   - Navigate to "View Policy" tab
+   - Select policy from dropdown
+   - Choose visualization mode:
+     - Interactive Tree Explorer (tile-based)
+     - Side-by-Side (PDF + Tree)
+     - Summary (traditional text)
+
+3. **Edit and Refine**
+   - Navigate to "Review & Edit" tab
+   - Load policy
+   - Enable editing mode
+   - Modify structure:
+     - Edit questions and routing
+     - Add/remove nodes
+     - Configure conditional paths
+     - Set outcome types
+   - Save changes
 
 ## Architecture
 
+### System Components
+
 ```
-┌─────────────────────────┐
-│   Streamlit Frontend    │ Port 8501
-│  - Upload & Process     │
-│  - Review Trees         │
-└───────────┬─────────────┘
-            │ JSON-RPC 2.0
-            ▼
-┌─────────────────────────┐
-│    A2A Agent Server     │ Port 8001
-│  - Single endpoint      │
-│  - Streaming enabled    │
-│  - Direct orchestrator  │
-└───────────┬─────────────┘
-            │
-            ▼
-┌─────────────────────────┐
-│    SQLite Database      │
-│  - Jobs                 │
-│  - Documents (PDFs)     │
-│  - Results              │
-│  - History              │
-└─────────────────────────┘
+Streamlit UI
+    ├── Upload & Process (Tab 1)
+    ├── View Policy (Tab 2)
+    └── Review & Edit (Tab 3)
+         │
+         ▼ (A2A Protocol)
+A2A Server (FastAPI)
+    └── PolicyProcessorAgent
+         └── LangGraph Orchestrator
+              ├── parse_pdf_node
+              ├── analyze_document_node
+              ├── chunk_document_node (semantic)
+              ├── extract_policy_node
+              ├── generate_trees_node (with routing)
+              ├── validate_results_node
+              └── retry_logic_node
+                   │
+                   ▼
+Database (SQLite)
+    ├── ProcessingJobs
+    ├── PolicyDocuments
+    └── ProcessingResults
+```
+
+### Decision Tree Structure
+
+Enhanced node types with routing:
+
+```python
+{
+  "node_id": "age_check",
+  "node_type": "question",
+  "question": {
+    "question_text": "Are you 18 or older?",
+    "question_type": "yes_no"
+  },
+  "children": {
+    "yes": { /* next question */ },
+    "no": { /* denial outcome */ }
+  },
+  "routing_rules": [{
+    "answer_value": "yes",
+    "comparison": "equals",
+    "next_node_id": "insurance_check"
+  }],
+  "confidence_score": 0.95
+}
+```
+
+## Core Components
+
+### Decision Tree Generation (`app/core/decision_tree_generator.py`)
+- Generates trees with explicit routing
+- Validates path completeness
+- Handles hierarchical policies
+- Supports AND/OR logic
+
+### Tree Validation (`app/core/tree_validator.py`)
+- Validates routing completeness
+- Checks node reachability
+- Identifies incomplete paths
+- Validates logic groups
+
+### Tile Visualizer (`app/streamlit_app/components/tree_visualizer.py`)
+- Renders vertical tile-based trees
+- Color-codes node types
+- Shows answer labels
+- Supports path highlighting
+
+### Enhanced Prompts (`app/core/tree_generation_prompts.py`)
+- Structured prompts for routing generation
+- Validation instructions
+- Complete path coverage requirements
+
+## Configuration
+
+### Environment Variables
+```bash
+# Required
+OPENAI_API_KEY=your-openai-api-key
+
+# Optional
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_DB=0
+
+# Model Configuration
+OPENAI_MODEL_PRIMARY=gpt-4o-mini      # For extraction
+OPENAI_MODEL_SECONDARY=gpt-4o         # For tree generation
+MAX_CONCURRENT_REQUESTS=5
+PER_REQUEST_TIMEOUT=300
+```
+
+### Processing Options
+- `use_gpt4`: Use GPT-4 for complex sections
+- `confidence_threshold`: Minimum confidence (0-1)
+- `enable_streaming`: Real-time updates
+- `max_depth`: Maximum hierarchy depth
+
+## API Reference
+
+### Tree Generation
+```python
+from app.core.decision_tree_generator import DecisionTreeGenerator
+
+generator = DecisionTreeGenerator(use_gpt4=True)
+tree = await generator.generate_tree_for_policy(policy)
+```
+
+### Tree Validation
+```python
+from app.core.tree_validator import TreeValidator
+
+validator = TreeValidator()
+is_valid, unreachable, incomplete = validator.validate_tree(tree)
+paths = validator.get_all_paths(tree)
+```
+
+### Visualization
+```python
+from app.streamlit_app.components import render_tile_tree_view
+
+render_tile_tree_view(tree_data)
 ```
 
 ## Project Structure
 
 ```
-policy processor/
-├── main_a2a_simplified.py          # A2A server entry point
-├── main_streamlit_simplified.py    # Streamlit UI entry point
-├── requirements.txt                # Python dependencies
-├── README.md                       # This file
-│
+policy-processor/
 ├── app/
-│   ├── a2a/
-│   │   ├── simplified_agent.py     # A2A agent executor
-│   │   └── simplified_server.py    # A2A server setup
-│   │
 │   ├── core/
-│   │   ├── orchestrator.py         # Main processing orchestrator
-│   │   ├── pdf_processor.py        # PDF extraction
-│   │   ├── policy_extractor.py     # Policy extraction with LLM
-│   │   ├── policy_aggregator.py    # Policy hierarchy builder
-│   │   ├── decision_tree_generator.py # Decision tree generation
-│   │   ├── validator.py            # Result validation
-│   │   ├── document_analyzer.py    # Document analysis
-│   │   └── chunking_strategy.py    # Document chunking
-│   │
-│   ├── database/
-│   │   ├── models.py               # SQLAlchemy models
-│   │   └── operations.py           # Database CRUD operations
-│   │
+│   │   ├── decision_tree_generator.py    # Tree generation with routing
+│   │   ├── tree_validator.py              # Path validation
+│   │   ├── tree_generation_prompts.py     # Enhanced LLM prompts
+│   │   ├── semantic_chunker.py            # Smart chunking (planned)
+│   │   ├── graph_nodes.py                 # LangGraph nodes
+│   │   ├── langgraph_orchestrator.py      # Main workflow
+│   │   └── ...
 │   ├── models/
-│   │   └── schemas.py              # Pydantic schemas
-│   │
+│   │   └── schemas.py                      # Enhanced models with routing
 │   ├── streamlit_app/
-│   │   ├── simplified_a2a_client.py # A2A client
-│   │   └── simplified_app.py        # Streamlit UI (2 tabs)
-│   │
-│   └── utils/
-│       ├── logger.py               # Logging configuration
-│       └── redis_client.py         # Redis client
-│
-└── data/
-    └── policy_processor.db         # SQLite database (auto-created)
+│   │   ├── app.py                         # Main UI
+│   │   └── components/
+│   │       └── tree_visualizer.py         # Tile-based visualization
+│   ├── a2a/
+│   │   ├── agent.py                       # A2A agent
+│   │   └── server.py                      # A2A server
+│   └── database/
+│       ├── models.py                      # SQLAlchemy models
+│       └── operations.py                  # Database operations
+├── docs/
+│   ├── IMPROVEMENT_PLAN.md                # Roadmap
+│   ├── IMPLEMENTATION_SUMMARY.md          # Current changes
+│   ├── ARCHITECTURE.md                    # System design
+│   └── QUICKSTART.md                      # Quick start
+├── requirements.txt
+├── main_a2a.py
+└── README.md
 ```
 
-## Database Schema
+## Enhanced Features
 
-### Tables
+### Conditional Routing
+All decision trees now include explicit routing logic:
+- Each question specifies next node for every possible answer
+- Support for complex conditions (AND/OR)
+- Validation ensures all paths lead to outcomes
+- No dead-end paths
 
-1. **processing_jobs** - Job metadata and status
-2. **policy_documents** - Original PDFs (base64) + metadata
-3. **processing_results** - Decision trees + validation results
-4. **job_history** - Event tracking and audit log
+### Path Validation
+Automatic validation of tree structure:
+- Checks for unreachable nodes
+- Identifies incomplete routing
+- Validates logic group consistency
+- Reports path coverage statistics
 
-### Relationships
+### Semantic Chunking (Planned)
+Intelligent document segmentation:
+- Policy-aware boundary detection
+- Preserves complete sections
+- Maintains cross-references
+- Adaptive chunk sizing
 
-- One job → One document
-- One job → One result
-- One job → Many history events
+## Performance
 
-## A2A Protocol
+### Benchmarks
+- PDF parsing: 2-5 seconds
+- Policy extraction: 10-30 seconds
+- Tree generation: 5-15 seconds per tree
+- Validation: <1 second per tree
 
-### Agent Card
-
-**Skill ID**: `process_policy`
-
-**Input Parameters**:
-- `document_base64` (string, required for new) - Base64-encoded PDF
-- `job_id` (string, alternative) - Retrieve existing results
-- `use_gpt4` (boolean, default: false) - Use GPT-4 model
-- `enable_streaming` (boolean, default: true) - Enable streaming
-- `confidence_threshold` (number, default: 0.7) - Validation threshold
-
-**Output**:
-- `job_id` (string) - Processing job identifier
-- `status` (string) - submitted | processing | completed | failed
-- `message` (string) - Human-readable status
-- `results` (object, optional) - Complete results if completed
-
-### JSON-RPC Request Example
-
-```json
-{
-  "jsonrpc": "2.0",
-  "method": "sendMessage",
-  "params": {
-    "message": {
-      "messageId": "msg-123",
-      "role": "user",
-      "parts": [{"kind": "text", "text": "Process policy document"}],
-      "taskId": "task-123",
-      "contextId": "ctx-123"
-    },
-    "metadata": {
-      "skill_id": "process_policy",
-      "parameters": {
-        "document_base64": "...",
-        "use_gpt4": false,
-        "enable_streaming": true,
-        "confidence_threshold": 0.7
-      }
-    }
-  },
-  "id": "req-123"
-}
-```
-
-## Configuration
-
-### Environment Variables
-
-```bash
-# Required
-OPENAI_API_KEY=sk-...
-
-# Optional
-REDIS_HOST=localhost
-REDIS_PORT=6379
-REDIS_PASSWORD=
-```
-
-### Server Configuration
-
-Edit in respective main files:
-
-- **A2A Server Port**: 8001 (in `main_a2a_simplified.py`)
-- **Streamlit Port**: 8501 (in `main_streamlit_simplified.py`)
-- **Database Path**: `./data/policy_processor.db`
-
-## Streaming Support
-
-Streaming can be controlled by the backend:
-
-```python
-# With streaming (real-time progress)
-result = client.process_document(
-    pdf_bytes=pdf,
-    enable_streaming=True
-)
-
-# Without streaming (final result only)
-result = client.process_document(
-    pdf_bytes=pdf,
-    enable_streaming=False
-)
-```
-
-For production deployment, implement streaming event handlers for real-time updates.
+### Optimization
+- Parallel tree generation (up to 5 concurrent)
+- Semantic chunking for better quality
+- Confidence-based retry logic
+- Redis caching for job state
 
 ## Troubleshooting
 
-### Server Shows Offline
+### Common Issues
 
-1. Check A2A server is running: `curl http://localhost:8001/health`
-2. Check agent card: `curl http://localhost:8001/.well-known/agent-card`
-3. Review server logs for errors
+**Trees show 0 questions**
+- Solution: Check debug logs for parsing errors
+- Verify tree structure with validator
+- Ensure question extraction completed
 
-### Processing Fails
+**Incomplete routing warnings**
+- Solution: Edit tree in Review tab
+- Add missing answer paths
+- Validate all outcomes are reachable
 
-1. Verify OpenAI API key is set correctly
-2. Check Redis is running (if configured)
-3. Review A2A server logs for errors
-4. Try with smaller document first
-
-### PDF Not in Side-by-Side View
-
-1. Ensure processing completed successfully
-2. Check database for `content_base64` in `policy_documents` table
-3. Verify job_id is correct
-
-## Production Deployment
-
-### Recommended Enhancements
-
-1. **Authentication** - Add API key or OAuth to A2A server
-2. **PostgreSQL** - Replace SQLite with production database
-3. **Redis** - Use for task store and caching
-4. **Monitoring** - Add Prometheus/Grafana metrics
-5. **Logging** - Centralized logging (ELK stack)
-6. **Rate Limiting** - Protect against abuse
-7. **Load Balancing** - Multiple A2A server instances
-8. **WebSocket Events** - Real-time streaming to frontend
-
-### Security Considerations
-
-- Enable HTTPS/TLS for A2A server
-- Implement authentication and authorization
-- Validate and sanitize all inputs
-- Set rate limits per user/API key
-- Enable audit logging
-- Secure database credentials
-- Use environment variables for secrets
+**High processing time**
+- Solution: Use GPT-4o-mini for simple policies
+- Enable semantic chunking
+- Reduce chunk overlap
 
 ## Development
 
-### Running Tests
+### Adding Custom Node Types
+1. Update `NodeType` enum in schemas.py
+2. Add handling in tree generator
+3. Update visualization component
+4. Add validation rules
+
+### Extending Visualization
+1. Modify `TileTreeVisualizer` class
+2. Add custom render methods
+3. Update styling in component
+4. Test with real trees
+
+## Testing
 
 ```bash
-# Run unit tests
-pytest tests/
+# Run all tests
+pytest
 
-# Run with coverage
-pytest --cov=app tests/
+# Test tree validation
+pytest tests/test_tree_validator.py
+
+# Test tree generation
+pytest tests/test_decision_tree_generator.py
+
+# Integration tests
+pytest tests/test_integration.py
 ```
 
-### Code Formatting
+## Documentation
 
-```bash
-# Format code
-black app/
+- **Quick Start**: `docs/QUICKSTART.md`
+- **Architecture**: `docs/ARCHITECTURE.md`
+- **Improvements**: `docs/IMPROVEMENT_PLAN.md`
+- **Testing**: `docs/TESTING_GUIDE.md`
 
-# Lint code
-flake8 app/
+## Contributing
 
-# Type checking
-mypy app/
-```
+1. Fork repository
+2. Create feature branch
+3. Implement with tests
+4. Update documentation
+5. Submit pull request
 
 ## License
 
-For authorized use only.
+MIT License
 
 ## Support
 
-For issues or questions:
-
-1. Check the logs in both terminals
-2. Test A2A server: `curl http://localhost:8001/.well-known/agent-card`
-3. Check database: `sqlite3 ./data/policy_processor.db`
-4. Review error messages in Streamlit UI
-
-## Version History
-
-### v2.0.0 (Current)
-- Simplified A2A architecture with single endpoint
-- Fixed "Method not found" error with proper JSON-RPC implementation
-- Added PDF storage for side-by-side review
-- Clean 2-tab Streamlit interface
-- Streaming support for production deployment
-- Enhanced database schema with proper relationships
-
-### v1.0.0 (Legacy)
-- Initial FastAPI-based implementation
-- Multiple A2A endpoints
-- Basic Streamlit UI
+- Issues: GitHub Issues
+- Documentation: `docs/` directory
+- Quick Start: `docs/QUICKSTART.md`

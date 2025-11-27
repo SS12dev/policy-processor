@@ -5,7 +5,7 @@ This orchestrator uses LangGraph's StateGraph to manage the processing workflow
 as a state machine with nodes for each processing stage.
 """
 import uuid
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, AsyncIterator
 from datetime import datetime
 
 from langgraph.graph import StateGraph, END
@@ -24,7 +24,6 @@ from app.core.graph_nodes import (
 )
 from app.models.schemas import ProcessingRequest, ProcessingResponse, ProcessingStage
 from app.utils.logger import get_logger
-from app.utils.redis_client import get_redis_client
 
 logger = get_logger(__name__)
 
@@ -32,12 +31,11 @@ logger = get_logger(__name__)
 class LangGraphOrchestrator:
     """
     LangGraph-based orchestrator that processes policy documents through
-    a state machine workflow.
+    a state machine workflow with streaming support.
     """
 
     def __init__(self):
         """Initialize the LangGraph orchestrator."""
-        self.redis_client = get_redis_client()
         self.graph = self._build_graph()
         logger.info("LangGraph orchestrator initialized")
 
@@ -48,7 +46,6 @@ class LangGraphOrchestrator:
         Returns:
             Compiled StateGraph
         """
-        # Create state graph
         workflow = StateGraph(ProcessingState)
 
         # Add all nodes
@@ -128,9 +125,81 @@ class LangGraphOrchestrator:
 
         # Compile the graph
         compiled_graph = workflow.compile()
-        logger.info("LangGraph workflow compiled successfully")
+        logger.info("LangGraph workflow compiled successfully with 8 nodes")
 
         return compiled_graph
+
+    async def stream_processing(
+        self,
+        request: ProcessingRequest,
+        job_id: Optional[str] = None
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """
+        Stream processing updates as the document flows through the workflow.
+
+        Args:
+            request: ProcessingRequest object
+            job_id: Optional job ID (generated if not provided)
+
+        Yields:
+            Progress updates as dictionaries with status information
+        """
+        if not job_id:
+            job_id = str(uuid.uuid4())
+
+        logger.info(f"[{job_id}] Starting streaming document processing")
+        start_time = datetime.utcnow()
+
+        try:
+            document_base64 = request.document
+
+            initial_state = create_initial_state(
+                job_id=job_id,
+                document_base64=document_base64,
+                use_gpt4=request.processing_options.use_gpt4,
+                enable_streaming=request.processing_options.enable_streaming,
+                confidence_threshold=request.processing_options.confidence_threshold,
+            )
+
+            logger.info(f"[{job_id}] Initial state created, starting streaming execution")
+
+            # Stream state updates as graph executes
+            async for chunk in self.graph.astream(initial_state, stream_mode="updates"):
+                # Extract node name and updated state
+                for node_name, node_state in chunk.items():
+                    current_stage = node_state.get("current_stage")
+                    progress = node_state.get("progress_percentage", 0.0)
+
+                    # Yield progress update
+                    update = {
+                        "job_id": job_id,
+                        "node": node_name,
+                        "stage": current_stage.value if current_stage else "unknown",
+                        "progress": progress,
+                        "errors": node_state.get("errors", []),
+                        "is_complete": node_name == "complete"
+                    }
+
+                    logger.debug(f"[{job_id}] Streaming update: {node_name} at {progress}%")
+                    yield update
+
+                    # If failed, stop streaming
+                    if node_state.get("is_failed", False):
+                        logger.error(f"[{job_id}] Processing failed at node {node_name}")
+                        return
+
+            logger.info(f"[{job_id}] Streaming execution complete")
+
+        except Exception as e:
+            logger.error(f"[{job_id}] Streaming processing failed: {e}", exc_info=True)
+            yield {
+                "job_id": job_id,
+                "node": "error",
+                "stage": ProcessingStage.FAILED.value,
+                "progress": 0.0,
+                "errors": [str(e)],
+                "is_complete": True
+            }
 
     async def process_document(
         self,
@@ -140,6 +209,9 @@ class LangGraphOrchestrator:
         """
         Process a policy document through the LangGraph workflow.
 
+        This method collects all streaming updates and returns the final result.
+        For progressive updates, use stream_processing() instead.
+
         Args:
             request: ProcessingRequest object
             job_id: Optional job ID (generated if not provided)
@@ -147,19 +219,15 @@ class LangGraphOrchestrator:
         Returns:
             ProcessingResponse object
         """
-        # Generate job ID if not provided
         if not job_id:
             job_id = str(uuid.uuid4())
 
-        logger.info(f"[{job_id}] Starting LangGraph document processing")
+        logger.info(f"[{job_id}] Starting document processing")
         start_time = datetime.utcnow()
 
         try:
-            # The document is already base64-encoded string (per ProcessingRequest schema)
-            # No need to encode again
             document_base64 = request.document
 
-            # Create initial state
             initial_state = create_initial_state(
                 job_id=job_id,
                 document_base64=document_base64,
@@ -170,8 +238,16 @@ class LangGraphOrchestrator:
 
             logger.info(f"[{job_id}] Initial state created, starting graph execution")
 
-            # Execute the graph
-            final_state = await self.graph.ainvoke(initial_state)
+            # Execute graph and collect final state
+            final_state = None
+            async for chunk in self.graph.astream(initial_state, stream_mode="updates"):
+                # Keep updating with latest state
+                for node_name, node_state in chunk.items():
+                    final_state = node_state
+                    logger.debug(f"[{job_id}] Completed node: {node_name}")
+
+            if not final_state:
+                raise Exception("Graph execution produced no final state")
 
             logger.info(f"[{job_id}] Graph execution complete")
 
@@ -180,15 +256,9 @@ class LangGraphOrchestrator:
 
             # Check if processing failed
             if final_state.get("is_failed", False):
-                logger.error(f"[{job_id}] Processing failed: {final_state.get('errors', [])}")
-
-                # Publish failure status
-                await self._publish_failure_status(
-                    job_id,
-                    final_state.get("errors", ["Unknown error"])
-                )
-
-                raise Exception(f"Processing failed: {final_state.get('errors', ['Unknown error'])[0]}")
+                errors = final_state.get("errors", ["Unknown error"])
+                logger.error(f"[{job_id}] Processing failed: {errors}")
+                raise Exception(f"Processing failed: {errors[0]}")
 
             # Update processing time in metadata
             if final_state.get("metadata"):
@@ -210,38 +280,22 @@ class LangGraphOrchestrator:
             )
 
             logger.info(
-                f"[{job_id}] LangGraph processing complete in {processing_time:.2f}s - "
+                f"[{job_id}] Processing complete in {processing_time:.2f}s - "
                 f"{len(final_state.get('decision_trees', []))} trees generated"
             )
 
             return response
 
         except Exception as e:
-            logger.error(f"[{job_id}] LangGraph processing failed: {e}", exc_info=True)
-
-            # Publish failure status
-            await self._publish_failure_status(job_id, [str(e)])
-
+            logger.error(f"[{job_id}] Processing failed: {e}", exc_info=True)
             raise
-
-    async def _publish_failure_status(self, job_id: str, errors: list):
-        """Publish failure status to Redis."""
-        try:
-            status_data = {
-                "job_id": job_id,
-                "stage": ProcessingStage.FAILED.value,
-                "progress_percentage": 0.0,
-                "message": f"Processing failed: {errors[0] if errors else 'Unknown error'}",
-                "errors": errors,
-            }
-            self.redis_client.set_status(job_id, status_data)
-            self.redis_client.publish(f"job:{job_id}:status", status_data)
-        except Exception as e:
-            logger.error(f"Failed to publish failure status: {e}")
 
     async def get_status(self, job_id: str) -> Optional[Dict[str, Any]]:
         """
-        Get current processing status.
+        Get current processing status from state.
+
+        Note: Status tracking is now handled through streaming updates.
+        This method is kept for backward compatibility.
 
         Args:
             job_id: Job identifier
@@ -249,12 +303,15 @@ class LangGraphOrchestrator:
         Returns:
             Status dict or None
         """
-        status_data = self.redis_client.get_status(job_id)
-        return status_data
+        logger.warning(f"[{job_id}] Status lookup called - use stream_processing() for real-time updates")
+        return None
 
     async def get_result(self, job_id: str) -> Optional[ProcessingResponse]:
         """
-        Get processing result.
+        Get processing result from storage.
+
+        Note: Results are now returned directly from process_document().
+        This method is kept for backward compatibility.
 
         Args:
             job_id: Job identifier
@@ -262,9 +319,5 @@ class LangGraphOrchestrator:
         Returns:
             ProcessingResponse object or None
         """
-        result_data = self.redis_client.get_result(job_id)
-
-        if result_data:
-            return ProcessingResponse(**result_data)
-
+        logger.warning(f"[{job_id}] Result lookup called - results are returned from process_document()")
         return None

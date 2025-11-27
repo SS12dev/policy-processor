@@ -39,8 +39,9 @@ class Settings:
 
     # Processing settings
     default_confidence_threshold: float = float(os.getenv("DEFAULT_CONFIDENCE_THRESHOLD", "0.7"))
-    max_chunk_tokens: int = int(os.getenv("MAX_CHUNK_TOKENS", "2000"))
-    chunk_overlap: int = int(os.getenv("CHUNK_OVERLAP", "200"))
+    target_chunk_tokens: int = int(os.getenv("TARGET_CHUNK_TOKENS", "10000"))
+    max_chunk_tokens: int = int(os.getenv("MAX_CHUNK_TOKENS", "16000"))
+    chunk_overlap: int = int(os.getenv("CHUNK_OVERLAP", "600"))
 
     # Database settings
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///./data/policy_processor.db")

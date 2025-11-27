@@ -50,12 +50,15 @@ class ChunkingStrategy:
             overlap: Overlap size in tokens
             use_llm: Whether to use LLM for intelligent boundary detection
         """
-        self.chunk_size = chunk_size or settings.max_chunk_tokens
+        self.target_chunk_size = chunk_size or settings.target_chunk_tokens
+        self.max_chunk_size = settings.max_chunk_tokens
         self.overlap = overlap or settings.chunk_overlap
         self.encoding = tiktoken.encoding_for_model("gpt-4")
         self.use_llm = use_llm
-        logger.info(f"Chunking strategy initialized - Chunk size: {self.chunk_size} tokens, Overlap: {self.overlap} tokens, LLM-assisted: {use_llm}")
-        logger.debug(f"Using tiktoken encoding: gpt-4")
+        logger.info(
+            f"Init chunking: target={self.target_chunk_size}, max={self.max_chunk_size}, "
+            f"overlap={self.overlap}, llm={use_llm}"
+        )
 
     async def _analyze_document_structure_with_llm(
         self, pages: List[PDFPage]
@@ -69,24 +72,18 @@ class ChunkingStrategy:
         Returns:
             Dictionary with structure analysis including policy boundaries
         """
-        logger.info(f"Using LLM to analyze document structure from {len(pages)} pages...")
+        logger.info(f"Analyze structure: {len(pages)} pages, sampling first 3")
 
-        # Get a sample of the document (first 3 pages for structure analysis)
         sample_pages = pages[:3]
-        logger.debug(f"Extracting sample text from first {len(sample_pages)} pages for structure analysis...")
-        sample_text = "\n\n".join([
-            f"--- Page {p.page_number} ---\n{p.text}"
-            for p in sample_pages
-        ])
+        sample_text = "\n\n".join([f"--- Page {p.page_number} ---\n{p.text}" for p in sample_pages])
 
-        # Truncate if too long
         tokens = self.encoding.encode(sample_text)
         original_token_count = len(tokens)
         if len(tokens) > 6000:
             sample_text = self.encoding.decode(tokens[:6000])
-            logger.debug(f"Truncated sample text from {original_token_count} to 6000 tokens for LLM analysis")
+            logger.debug(f"Truncated sample: {original_token_count} -> 6000 tokens")
         else:
-            logger.debug(f"Sample text has {original_token_count} tokens")
+            logger.debug(f"Sample tokens: {original_token_count}")
 
         prompt = f"""Analyze this policy document and identify its structure to help with intelligent chunking.
 
@@ -210,8 +207,7 @@ Return ONLY valid JSON, no markdown formatting."""
         Returns:
             List of DocumentChunk objects
         """
-        logger.info(f"Starting intelligent chunking for {len(pages)} pages...")
-        logger.debug(f"Chunking parameters - Target size: {self.chunk_size} tokens, Overlap: {self.overlap} tokens, LLM-assisted: {self.use_llm}")
+        logger.info(f"Start chunking {len(pages)} pages: target={self.target_chunk_size}, max={self.max_chunk_size}")
 
         chunks = []
 
@@ -282,8 +278,8 @@ Return ONLY valid JSON, no markdown formatting."""
         structure_analysis: Dict[str, Any]
     ) -> List[DocumentChunk]:
         """
-        Create chunks based on LLM-identified policy boundaries.
-        Ensures policies are never split across chunks.
+        Create chunks based on LLM-identified policy boundaries with hard limits.
+        Prefers policy boundaries but enforces max chunk size.
 
         Args:
             pages: List of PDFPage objects
@@ -293,13 +289,9 @@ Return ONLY valid JSON, no markdown formatting."""
         Returns:
             List of DocumentChunk objects
         """
-        logger.info("Chunking by policy boundaries to avoid splitting policies...")
+        logger.info(f"Chunk by boundaries: {len(boundaries)} found, max_size={self.max_chunk_size}")
 
-        # Build full text with page markers
-        full_text = "\n\n".join([
-            f"--- Page {p.page_number} ---\n{p.text}"
-            for p in pages
-        ])
+        full_text = "\n\n".join([f"--- Page {p.page_number} ---\n{p.text}" for p in pages])
 
         chunks = []
         chunk_id = 0
@@ -307,83 +299,127 @@ Return ONLY valid JSON, no markdown formatting."""
         current_start_page = 1
         current_section_title = "Document Start"
         last_boundary_position = 0
-
-        # Sort boundaries by position
         sorted_boundaries = sorted(boundaries, key=lambda x: x['position'])
 
         for i, boundary in enumerate(sorted_boundaries):
-            # Get text from last boundary to this boundary
             segment_text = full_text[last_boundary_position:boundary['position']]
-
-            # Add to current chunk
             potential_text = current_chunk_text + segment_text
-
-            # Count tokens
             token_count = self._count_tokens(potential_text)
 
-            # Check if adding this segment would exceed chunk size
-            if token_count >= self.chunk_size and current_chunk_text:
-                # Create chunk WITHOUT including the new segment
-                # This ensures we don't split the policy that's starting
-                end_page = self._find_page_number_at_position(
-                    full_text, last_boundary_position, pages
-                )
+            # Check against target size
+            should_split = token_count >= self.target_chunk_size and current_chunk_text
+
+            # Force split if exceeding max size
+            if token_count > self.max_chunk_size:
+                logger.warning(f"Chunk {chunk_id} exceeds max ({token_count} > {self.max_chunk_size}), force split")
+                should_split = True
+
+            if should_split:
+                end_page = self._find_page_number_at_position(full_text, last_boundary_position, pages)
+                chunk_tokens = self._count_tokens(current_chunk_text)
 
                 chunk = DocumentChunk(
                     chunk_id=chunk_id,
                     text=current_chunk_text,
                     start_page=current_start_page,
                     end_page=end_page,
-                    section_context=current_section_title,
-                    token_count=self._count_tokens(current_chunk_text),
+                    section_context=current_section_title[:80],
+                    token_count=chunk_tokens,
                     metadata={
                         "boundary_count": i - chunk_id,
                         "chunking_method": "llm_policy_boundaries"
                     },
                 )
                 chunks.append(chunk)
+                logger.info(f"Created chunk {chunk_id}: pages {current_start_page}-{end_page}, tokens={chunk_tokens}")
 
-                # Start new chunk with contextual overlap
-                overlap_text = self._get_contextual_overlap(
-                    current_chunk_text, structure_analysis
-                )
+                overlap_text = self._get_contextual_overlap(current_chunk_text, structure_analysis)
                 current_chunk_text = overlap_text + segment_text
-                current_start_page = self._find_page_number_at_position(
-                    full_text, boundary['position'], pages
-                )
+                current_start_page = self._find_page_number_at_position(full_text, boundary['position'], pages)
                 current_section_title = boundary.get('text', 'Policy Section')
                 chunk_id += 1
             else:
-                # Add segment to current chunk
                 current_chunk_text = potential_text
                 if not current_chunk_text.strip():
-                    # First chunk, set section title
                     current_section_title = boundary.get('text', 'Policy Section')
 
             last_boundary_position = boundary['position']
 
-        # Handle remaining text after last boundary
+        # Handle remaining text
         remaining_text = full_text[last_boundary_position:]
         if remaining_text.strip():
             current_chunk_text += remaining_text
 
-        # Create final chunk
+        # Force split final chunk if too large
         if current_chunk_text.strip():
-            chunk = DocumentChunk(
-                chunk_id=chunk_id,
-                text=current_chunk_text,
-                start_page=current_start_page,
-                end_page=pages[-1].page_number,
-                section_context=current_section_title,
-                token_count=self._count_tokens(current_chunk_text),
-                metadata={
-                    "boundary_count": len(sorted_boundaries) - chunk_id,
-                    "chunking_method": "llm_policy_boundaries"
-                },
-            )
-            chunks.append(chunk)
+            final_tokens = self._count_tokens(current_chunk_text)
+            if final_tokens > self.max_chunk_size:
+                logger.warning(f"Final chunk too large ({final_tokens}), page-based split")
+                page_chunks = self._split_by_pages(current_chunk_text, current_start_page, pages, chunk_id)
+                chunks.extend(page_chunks)
+            else:
+                chunk = DocumentChunk(
+                    chunk_id=chunk_id,
+                    text=current_chunk_text,
+                    start_page=current_start_page,
+                    end_page=pages[-1].page_number,
+                    section_context=current_section_title[:80],
+                    token_count=final_tokens,
+                    metadata={"boundary_count": len(sorted_boundaries) - chunk_id, "chunking_method": "llm_policy_boundaries"},
+                )
+                chunks.append(chunk)
+                logger.info(f"Created final chunk {chunk_id}: pages {current_start_page}-{pages[-1].page_number}, tokens={final_tokens}")
 
-        logger.info(f"Created {len(chunks)} chunks respecting {len(boundaries)} policy boundaries")
+        logger.info(f"Created {len(chunks)} chunks from {len(boundaries)} boundaries")
+        return chunks
+
+    def _split_by_pages(
+        self, text: str, start_page: int, all_pages: List[PDFPage], start_chunk_id: int
+    ) -> List[DocumentChunk]:
+        """Split oversized text by pages to enforce max chunk size."""
+        page_markers = list(re.finditer(r'--- Page (\d+) ---', text))
+        chunks = []
+        chunk_id = start_chunk_id
+        current_text = ""
+        current_start_idx = 0
+
+        for marker in page_markers:
+            page_num = int(marker.group(1))
+            segment = text[current_start_idx:marker.start()]
+            potential = current_text + segment
+
+            if self._count_tokens(potential) > self.target_chunk_size and current_text:
+                chunk_tokens = self._count_tokens(current_text)
+                chunks.append(DocumentChunk(
+                    chunk_id=chunk_id,
+                    text=current_text,
+                    start_page=start_page,
+                    end_page=page_num - 1,
+                    section_context=f"Pages {start_page}-{page_num-1}",
+                    token_count=chunk_tokens,
+                    metadata={"chunking_method": "page_split_forced"}
+                ))
+                logger.info(f"Force-split chunk {chunk_id}: pages {start_page}-{page_num-1}, {chunk_tokens} tokens")
+                current_text = segment
+                start_page = page_num
+                chunk_id += 1
+            else:
+                current_text = potential
+
+            current_start_idx = marker.start()
+
+        if current_text.strip():
+            chunk_tokens = self._count_tokens(current_text)
+            chunks.append(DocumentChunk(
+                chunk_id=chunk_id,
+                text=current_text,
+                start_page=start_page,
+                end_page=all_pages[-1].page_number,
+                section_context=f"Pages {start_page}-{all_pages[-1].page_number}",
+                token_count=chunk_tokens,
+                metadata={"chunking_method": "page_split_forced"}
+            ))
+
         return chunks
 
     def _find_page_number_at_position(
@@ -529,7 +565,7 @@ Return ONLY valid JSON, no markdown formatting."""
             # Check if we should create a chunk
             token_count = self._count_tokens(current_chunk_text)
 
-            if token_count >= self.chunk_size or i == len(sections) - 1:
+            if token_count >= self.target_chunk_size or i == len(sections) - 1:
                 # Create chunk
                 chunk = DocumentChunk(
                     chunk_id=chunk_id,
@@ -602,7 +638,7 @@ Return ONLY valid JSON, no markdown formatting."""
             potential_text = current_chunk_text + page_text
             token_count = self._count_tokens(potential_text)
 
-            if token_count >= self.chunk_size and current_chunk_text:
+            if token_count >= self.target_chunk_size and current_chunk_text:
                 # Create chunk from accumulated text
                 chunk = DocumentChunk(
                     chunk_id=chunk_id,

@@ -44,5 +44,9 @@ a2a-sdk[http-server]
 # Streamlit Frontend
 streamlit
 
+# Visualization
+plotly>=5.0.0
+networkx>=2.0
+
 # Database
 sqlalchemy

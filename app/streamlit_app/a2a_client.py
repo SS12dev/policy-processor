@@ -294,6 +294,36 @@ class A2AClient:
                         ]
                         response_text = "\n".join(text_parts)
 
+                        # Extract JSON from markdown code block if present
+                        # Pattern: ```json\n{...}\n```
+                        if "```json" in response_text:
+                            try:
+                                # Find the JSON block
+                                json_start = response_text.find("```json") + 7
+                                json_end = response_text.find("```", json_start)
+                                if json_end > json_start:
+                                    json_text = response_text[json_start:json_end].strip()
+                                    parsed_data = json.loads(json_text)
+
+                                    # Extract job_id from the message if available
+                                    job_id = None
+                                    if "**Job ID:**" in response_text:
+                                        # Extract job_id from markdown
+                                        job_id_start = response_text.find("**Job ID:**") + 11
+                                        job_id_end = response_text.find("\n", job_id_start)
+                                        job_id_text = response_text[job_id_start:job_id_end].strip()
+                                        # Remove markdown code formatting
+                                        job_id = job_id_text.strip("`").strip()
+
+                                    return {
+                                        "status": "completed",
+                                        "job_id": job_id or parsed_data.get("job_id"),
+                                        "results": parsed_data,
+                                        "message": response_text
+                                    }
+                            except (json.JSONDecodeError, ValueError) as e:
+                                logger.warning(f"Failed to parse JSON from code block: {e}")
+
                         # Try to parse as JSON if it looks like JSON
                         if response_text.strip().startswith("{"):
                             try:
@@ -301,8 +331,57 @@ class A2AClient:
                             except json.JSONDecodeError:
                                 pass
 
+                        # Check if this is an error message
+                        if response_text.startswith("ERROR:"):
+                            return {
+                                "status": "failed",
+                                "message": response_text.replace("ERROR:", "").strip(),
+                                "task_id": result.get("taskId")
+                            }
+
                         # Return as text response
                         return {"response": response_text, "raw": result}
+
+            # Check for direct parts in result (not wrapped in messages)
+            # This handles the case where response comes directly without messages wrapper
+            if "parts" in result:
+                parts = result.get("parts", [])
+                if parts and len(parts) > 0:
+                    text = parts[0].get("text", "")
+
+                    # Check for error first
+                    if text.startswith("ERROR:"):
+                        return {
+                            "status": "failed",
+                            "message": text.replace("ERROR:", "").strip(),
+                            "task_id": result.get("taskId")
+                        }
+
+                    # Try to extract JSON from markdown code block
+                    if "```json" in text:
+                        try:
+                            json_start = text.find("```json") + 7
+                            json_end = text.find("```", json_start)
+                            if json_end > json_start:
+                                json_text = text[json_start:json_end].strip()
+                                parsed_data = json.loads(json_text)
+
+                                # Extract job_id from the message if available
+                                job_id = None
+                                if "**Job ID:**" in text:
+                                    job_id_start = text.find("**Job ID:**") + 11
+                                    job_id_end = text.find("\n", job_id_start)
+                                    job_id_text = text[job_id_start:job_id_end].strip()
+                                    job_id = job_id_text.strip("`").strip()
+
+                                return {
+                                    "status": "completed",
+                                    "job_id": job_id or parsed_data.get("job_id") or result.get("taskId"),
+                                    "results": parsed_data,
+                                    "message": text
+                                }
+                        except (json.JSONDecodeError, ValueError) as e:
+                            logger.warning(f"Failed to parse JSON from direct parts: {e}")
 
             # If task_id is present, return it
             if "taskId" in result:

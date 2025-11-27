@@ -68,6 +68,7 @@ class DatabaseOperations:
         with self.get_session() as session:
             job = ProcessingJob(
                 job_id=job_data["job_id"],
+                policy_name=job_data["policy_name"],
                 status=job_data.get("status", "submitted"),
                 document_type=job_data.get("document_type"),
                 use_gpt4=job_data.get("use_gpt4", False),
@@ -80,7 +81,7 @@ class DatabaseOperations:
             session.commit()
             session.refresh(job)
 
-            logger.info(f"Saved job {job.job_id}")
+            logger.info(f"Saved job {job.job_id} for policy '{job.policy_name}'")
 
             # Add history entry
             self.add_history_event(job.job_id, "created", {"status": "submitted"})
@@ -219,6 +220,7 @@ class DatabaseOperations:
             return [
                 {
                     "job_id": job.job_id,
+                    "policy_name": job.policy_name,
                     "status": job.status,
                     "document_type": job.document_type,
                     "created_at": job.created_at.isoformat() if job.created_at else None,
@@ -248,6 +250,48 @@ class DatabaseOperations:
 
             return query.count()
 
+    def policy_name_exists(self, policy_name: str) -> bool:
+        """
+        Check if a policy name already exists.
+
+        Args:
+            policy_name: Policy name to check
+
+        Returns:
+            True if policy name exists, False otherwise
+        """
+        with self.get_session() as session:
+            exists = session.query(ProcessingJob).filter_by(policy_name=policy_name).first() is not None
+            return exists
+
+    def get_all_policies(self, status: Optional[str] = "completed") -> List[Dict[str, str]]:
+        """
+        Get all policies with their names and job IDs.
+
+        Args:
+            status: Filter by status (default: "completed")
+
+        Returns:
+            List of dictionaries with policy_name and job_id
+        """
+        with self.get_session() as session:
+            query = session.query(ProcessingJob.policy_name, ProcessingJob.job_id)
+
+            if status:
+                query = query.filter_by(status=status)
+
+            query = query.order_by(desc(ProcessingJob.created_at))
+
+            policies = query.all()
+
+            return [
+                {
+                    "policy_name": policy[0],
+                    "job_id": policy[1]
+                }
+                for policy in policies
+            ]
+
     # Document operations
 
     def save_document(self, document_data: Dict[str, Any]) -> PolicyDocument:
@@ -269,6 +313,7 @@ class DatabaseOperations:
 
             document = PolicyDocument(
                 job_id=document_data["job_id"],
+                policy_name=document_data["policy_name"],
                 filename=document_data.get("filename"),
                 file_size_bytes=document_data.get("file_size_bytes"),
                 mime_type=document_data.get("mime_type", "application/pdf"),
@@ -285,7 +330,7 @@ class DatabaseOperations:
             session.commit()
             session.refresh(document)
 
-            logger.info(f"Saved document for job {document.job_id}")
+            logger.info(f"Saved document for job {document.job_id} with policy '{document.policy_name}'")
 
             return document
 
@@ -319,6 +364,11 @@ class DatabaseOperations:
             Created ProcessingResult instance
         """
         with self.get_session() as session:
+            # Get the job to extract policy_name
+            job = session.query(ProcessingJob).filter_by(job_id=job_id).first()
+            if not job:
+                raise ValueError(f"Job {job_id} not found")
+
             # Extract quick-access fields
             policy_hierarchy = results.get("policy_hierarchy", {})
             decision_trees = results.get("decision_trees", [])
@@ -326,6 +376,7 @@ class DatabaseOperations:
 
             result = ProcessingResult(
                 job_id=job_id,
+                policy_name=job.policy_name,
                 policy_hierarchy_json=policy_hierarchy,
                 decision_trees_json=decision_trees,
                 validation_result_json=validation,
@@ -350,18 +401,16 @@ class DatabaseOperations:
             session.add(result)
 
             # Also update the job with summary stats
-            job = session.query(ProcessingJob).filter_by(job_id=job_id).first()
-            if job:
-                job.total_pages = results.get("metadata", {}).get("total_pages")
-                job.total_policies = result.total_policies
-                job.total_decision_trees = result.total_decision_trees
-                job.validation_confidence = result.overall_confidence
-                job.validation_passed = result.is_valid
+            job.total_pages = results.get("metadata", {}).get("total_pages")
+            job.total_policies = result.total_policies
+            job.total_decision_trees = result.total_decision_trees
+            job.validation_confidence = result.overall_confidence
+            job.validation_passed = result.is_valid
 
             session.commit()
             session.refresh(result)
 
-            logger.info(f"Saved results for job {job_id}")
+            logger.info(f"Saved results for job {job_id} with policy '{job.policy_name}'")
 
             # Add history entry
             self.add_history_event(job_id, "results_saved", {
@@ -396,6 +445,49 @@ class DatabaseOperations:
                 "validation_result": result.validation_result_json,
                 "processing_stats": result.processing_stats_json,
             }
+
+    def update_results(self, job_id: str, updated_data: Dict[str, Any]) -> bool:
+        """
+        Update processing results with edited data.
+
+        Args:
+            job_id: Job identifier
+            updated_data: Dictionary containing updated policy_hierarchy and/or decision_trees
+
+        Returns:
+            True if successful, False otherwise
+        """
+        with self.get_session() as session:
+            result = session.query(ProcessingResult).filter_by(job_id=job_id).first()
+
+            if not result:
+                logger.warning(f"Results for job {job_id} not found")
+                return False
+
+            # Update fields if provided
+            if "policy_hierarchy" in updated_data:
+                result.policy_hierarchy_json = updated_data["policy_hierarchy"]
+                # Update quick-access fields
+                result.total_policies = updated_data["policy_hierarchy"].get("total_policies", 0)
+                result.total_root_policies = len(updated_data["policy_hierarchy"].get("root_policies", []))
+                result.max_hierarchy_depth = updated_data["policy_hierarchy"].get("max_depth", 0)
+
+            if "decision_trees" in updated_data:
+                result.decision_trees_json = updated_data["decision_trees"]
+                result.total_decision_trees = len(updated_data["decision_trees"])
+
+            result.updated_at = datetime.utcnow()
+
+            session.commit()
+
+            logger.info(f"Updated results for job {job_id}")
+
+            # Add history entry
+            self.add_history_event(job_id, "results_updated", {
+                "edited_fields": list(updated_data.keys())
+            })
+
+            return True
 
     # History operations
 

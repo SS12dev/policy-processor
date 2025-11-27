@@ -41,6 +41,45 @@ class QuestionType(str, Enum):
     CONDITIONAL = "conditional"
 
 
+class NodeType(str, Enum):
+    """Types of decision tree nodes."""
+    QUESTION = "question"
+    DECISION = "decision"
+    OUTCOME = "outcome"
+    ROUTER = "router"
+    GROUP = "group"
+
+
+class OutcomeType(str, Enum):
+    """Types of outcome nodes."""
+    APPROVED = "approved"
+    DENIED = "denied"
+    REFER_TO_MANUAL = "refer_to_manual"
+    PENDING_REVIEW = "pending_review"
+    REQUIRES_DOCUMENTATION = "requires_documentation"
+
+
+class LogicGroupType(str, Enum):
+    """Types of logic grouping."""
+    AND = "AND"
+    OR = "OR"
+    NOT = "NOT"
+    XOR = "XOR"
+
+
+class ComparisonOperator(str, Enum):
+    """Comparison operators for routing conditions."""
+    EQUALS = "equals"
+    NOT_EQUALS = "not_equals"
+    GREATER_THAN = "greater_than"
+    LESS_THAN = "less_than"
+    GREATER_EQUAL = "greater_equal"
+    LESS_EQUAL = "less_equal"
+    IN_RANGE = "in_range"
+    CONTAINS = "contains"
+    MATCHES_PATTERN = "matches_pattern"
+
+
 class ProcessingOptions(BaseModel):
     """Options for document processing."""
     use_gpt4: bool = Field(default=False, description="Use GPT-4 for complex sections")
@@ -116,6 +155,25 @@ class QuestionOption(BaseModel):
     routes_to_policy: Optional[str] = Field(default=None, description="Routes to child policy title")
 
 
+class RoutingRule(BaseModel):
+    """Defines how to route based on answer value."""
+    answer_value: Union[str, int, float, bool] = Field(..., description="Answer value to match")
+    comparison: ComparisonOperator = Field(default=ComparisonOperator.EQUALS, description="How to compare")
+    next_node_id: str = Field(..., description="Next node to route to")
+    condition_expression: Optional[str] = Field(default=None, description="Complex condition expression")
+    range_min: Optional[Union[int, float]] = Field(default=None, description="Minimum for range comparison")
+    range_max: Optional[Union[int, float]] = Field(default=None, description="Maximum for range comparison")
+
+
+class LogicGroup(BaseModel):
+    """Defines logical grouping of nodes."""
+    group_id: str = Field(..., description="Unique group identifier")
+    group_type: LogicGroupType = Field(..., description="Type of logical grouping")
+    member_node_ids: List[str] = Field(default_factory=list, description="Node IDs in this group")
+    parent_group_id: Optional[str] = Field(default=None, description="Parent group for nested logic")
+    description: str = Field(default="", description="Human-readable group description")
+
+
 class EligibilityQuestion(BaseModel):
     """A question in the decision tree."""
     question_id: str = Field(..., description="Unique question identifier")
@@ -126,16 +184,30 @@ class EligibilityQuestion(BaseModel):
     help_text: Optional[str] = Field(default=None, description="Additional context or help")
     source_references: List[SourceReference] = Field(default_factory=list)
     explanation: str = Field(..., description="Why this question is being asked")
+    routing_rules: Optional[List[RoutingRule]] = Field(default=None, description="Explicit routing rules for this question")
 
 
 class DecisionNode(BaseModel):
-    """A node in the decision tree."""
+    """A node in the decision tree with conditional routing support."""
     node_id: str = Field(..., description="Unique node identifier")
-    node_type: str = Field(..., description="question, decision, outcome")
+    node_type: str = Field(..., description="question, decision, outcome, router, group")
+
+    # Node content based on type
     question: Optional[EligibilityQuestion] = Field(default=None, description="Question if this is a question node")
+    decision_logic: Optional[str] = Field(default=None, description="Logic expression for decision nodes")
     outcome: Optional[str] = Field(default=None, description="Outcome if this is an outcome node")
-    outcome_type: Optional[str] = Field(default=None, description="approved, denied, refer_to_manual")
+    outcome_type: Optional[str] = Field(default=None, description="approved, denied, refer_to_manual, etc.")
+
+    # Routing configuration
     children: Dict[str, 'DecisionNode'] = Field(default_factory=dict, description="Child nodes keyed by answer")
+    routing_rules: Optional[List[RoutingRule]] = Field(default=None, description="Explicit routing configuration")
+    default_next_node_id: Optional[str] = Field(default=None, description="Default next node if no routing rule matches")
+
+    # Grouping and logic
+    logic_group: Optional[LogicGroup] = Field(default=None, description="Logic group this node belongs to")
+    group_type: Optional[LogicGroupType] = Field(default=None, description="If this node is a group container")
+
+    # Metadata
     source_references: List[SourceReference] = Field(default_factory=list)
     confidence_score: float = Field(..., description="Confidence in this node (0-1)")
 
@@ -144,18 +216,29 @@ class DecisionNode(BaseModel):
     child_policy_references: List[str] = Field(default_factory=list, description="Child policies this routes to")
     parent_policy_id: Optional[str] = Field(default=None, description="Parent policy ID if this is a child")
     navigation_hint: Optional[str] = Field(default=None, description="Context hint for user")
+    display_order: Optional[int] = Field(default=None, description="Order for display in UI")
 
 
 class DecisionTree(BaseModel):
-    """Complete decision tree for a policy."""
+    """Complete decision tree for a policy with conditional routing."""
     tree_id: str = Field(..., description="Unique tree identifier")
     policy_id: str = Field(..., description="Associated policy ID")
     policy_title: str = Field(..., description="Policy title")
     root_node: DecisionNode = Field(..., description="Root node of the tree")
+    questions: List[EligibilityQuestion] = Field(default_factory=list, description="Flat list of all questions in the tree")
+    logic_groups: List[LogicGroup] = Field(default_factory=list, description="Logic groups for AND/OR conditions")
+
+    # Tree statistics
     total_nodes: int = Field(..., description="Total number of nodes")
     total_paths: int = Field(..., description="Total number of possible paths")
+    total_outcomes: int = Field(default=0, description="Number of outcome nodes")
     max_depth: int = Field(..., description="Maximum depth of the tree")
     confidence_score: float = Field(..., description="Overall confidence in tree (0-1)")
+
+    # Path validation
+    has_complete_routing: bool = Field(default=False, description="Whether all paths lead to outcomes")
+    unreachable_nodes: List[str] = Field(default_factory=list, description="Node IDs that are unreachable")
+    incomplete_routes: List[str] = Field(default_factory=list, description="Node IDs with incomplete routing")
 
     # Hierarchical metadata
     policy_level: int = Field(default=0, description="Hierarchy level (0=root)")

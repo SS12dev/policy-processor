@@ -4,7 +4,7 @@ Decision tree generation system for converting policies into eligibility questio
 import json
 import uuid
 from typing import List, Dict, Any, Optional
-from openai import AsyncOpenAI
+from langchain_openai import ChatOpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 from config.settings import settings
 from app.utils.logger import get_logger
@@ -32,20 +32,26 @@ logger = get_logger(__name__)
 class DecisionTreeGenerator:
     """Generates decision trees from policies with eligibility questions."""
 
-    def __init__(self, use_gpt4: bool = False):
+    def __init__(self, use_gpt4: bool = False, llm: Optional[ChatOpenAI] = None, max_tokens: int = 8000):
         """
         Initialize decision tree generator.
 
         Args:
             use_gpt4: Whether to use GPT-4 for generation
+            llm: Optional pre-configured LLM client
+            max_tokens: Maximum tokens for LLM response (default 8000 for large trees)
         """
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
-        self.model = settings.openai_model_secondary if use_gpt4 else settings.openai_model_primary
+        from app.utils.llm import get_llm
+        
+        # If LLM provided, use it; otherwise create with increased token limit
+        self.llm = llm if llm is not None else get_llm(use_gpt4=use_gpt4, max_tokens=max_tokens)
         self.use_gpt4 = use_gpt4
+        self.max_tokens = max_tokens
         self.aggregator = PolicyAggregator()
         self.generation_plan: Optional[PolicyGenerationPlan] = None
         self.generated_trees: Dict[str, DecisionTree] = {}  # policy_id -> tree
-        logger.info(f"Decision tree generator initialized with model: {self.model} (GPT-4: {use_gpt4})")
+        model_name = "gpt-4o" if use_gpt4 else "gpt-4o-mini"
+        logger.info(f"Decision tree generator initialized with model: {model_name} (GPT-4: {use_gpt4}), max_tokens: {max_tokens}")
         logger.debug(f"Configuration - Max concurrent: {settings.openai_max_concurrent_requests}, Request timeout: {settings.openai_per_request_timeout}s")
 
     async def generate_hierarchical_trees(
@@ -283,21 +289,17 @@ class DecisionTreeGenerator:
         prompt_length = len(prompt)
 
         try:
-            logger.debug(f"Calling {self.model} API for tree generation (policy: {policy.policy_id}, prompt: {prompt_length} chars)")
+            if self.llm is None:
+                logger.error(f"LLM not initialized for policy {policy.policy_id}")
+                raise ValueError(f"LLM not initialized")
 
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": DECISION_TREE_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.1,
-                response_format={"type": "json_object"},
-            )
+            logger.debug(f"Calling LLM API for tree generation (policy: {policy.policy_id}, prompt: {prompt_length} chars)")
 
-            logger.debug(f"Received tree response from {self.model} for policy {policy.policy_id}")
+            response = await self.llm.ainvoke(prompt)
 
-            content = response.choices[0].message.content
+            logger.debug(f"Received tree response from LLM for policy {policy.policy_id}")
+
+            content = response.content
             logger.debug(f"[LLM Response] Content length: {len(content) if content else 0} characters")
 
             # Validate response is not empty
@@ -305,8 +307,60 @@ class DecisionTreeGenerator:
                 logger.error(f"[LLM Response] Empty response for policy {policy.policy_id}")
                 raise ValueError(f"LLM returned empty response for policy {policy.policy_id}")
 
+            # Log first 200 chars for debugging
+            logger.debug(f"[LLM Response Preview] {content[:200]}...")
+
+            # Remove explanatory text before JSON
+            # LLM often adds "Based on...", "Here is...", etc. before the actual JSON
+            if "```json" in content:
+                # Extract content between ```json and ```
+                parts = content.split("```json")
+                if len(parts) > 1:
+                    content = parts[1].split("```")[0].strip()
+            elif "```" in content:
+                # Handle generic code blocks
+                content = content.split("```")[1]
+                if content.startswith("json"):
+                    content = content[4:]
+                content = content.strip()
+            elif content.strip().startswith("{"):
+                # Already valid JSON, just strip whitespace
+                content = content.strip()
+            else:
+                # Try to find JSON object in response (starts with {, ends with })
+                json_start = content.find("{")
+                if json_start != -1:
+                    logger.debug(f"[LLM Response] Stripping {json_start} chars of explanatory text before JSON")
+                    content = content[json_start:]
+                
+            # Validate content before JSON parsing
+            if not content or not content.strip():
+                logger.error(f"[LLM Response] Content empty after cleanup for policy {policy.policy_id}")
+                raise ValueError(f"LLM returned empty content after cleanup for policy {policy.policy_id}")
+
             logger.debug(f"Parsing JSON response for policy {policy.policy_id}...")
-            result = json.loads(content)
+            try:
+                # STEP 1: Attempt to repair common JSON issues before parsing
+                content = self._repair_json(content, policy.policy_id)
+                
+                # STEP 2: Parse the JSON
+                result = json.loads(content)
+            except json.JSONDecodeError as e:
+                # Log the problematic content
+                logger.error(f"[JSON Parse Error] Policy {policy.policy_id}: {e}")
+                logger.error(f"[JSON Parse Error] Content (first 500 chars): {content[:500]}")
+                logger.error(f"[JSON Parse Error] Error location: line {e.lineno}, column {e.colno}, char {e.pos}")
+                
+                # Try one more repair attempt for specific common issues
+                try:
+                    logger.warning(f"[JSON Repair] Attempting emergency repair for policy {policy.policy_id}")
+                    content_repaired = self._emergency_json_repair(content)
+                    result = json.loads(content_repaired)
+                    logger.info(f"[JSON Repair] Successfully repaired JSON for policy {policy.policy_id}")
+                except Exception as repair_err:
+                    logger.error(f"[JSON Repair] Emergency repair failed: {repair_err}")
+                    raise e  # Raise original error
+                
             logger.debug(f"[LLM Response] Parsed JSON keys: {list(result.keys())}")
 
             # Validate result structure before parsing
@@ -414,21 +468,24 @@ class DecisionTreeGenerator:
         )
 
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": DECISION_TREE_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.1,
-                response_format={"type": "json_object"},
-            )
+            if self.llm is None:
+                logger.error(f"LLM not initialized for aggregator policy {policy.policy_id}")
+                raise ValueError(f"LLM not initialized")
 
-            content = response.choices[0].message.content
+            response = await self.llm.ainvoke(prompt)
+
+            content = response.content
 
             # Validate response
             if not content or not content.strip():
                 raise ValueError(f"LLM returned empty response for aggregator policy {policy.policy_id}")
+
+            # Remove markdown code blocks if present
+            if content.startswith("```"):
+                content = content.split("```")[1]
+                if content.startswith("json"):
+                    content = content[4:]
+                content = content.strip()
 
             result = json.loads(content)
 
@@ -508,17 +565,22 @@ class DecisionTreeGenerator:
             context=str(context)
         )
 
-        response = await self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": DECISION_TREE_SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.1,
-            response_format={"type": "json_object"},
-        )
+        if self.llm is None:
+            logger.error(f"LLM not initialized for leaf policy {policy.policy_id}")
+            raise ValueError(f"LLM not initialized")
 
-        result = json.loads(response.choices[0].message.content)
+        response = await self.llm.ainvoke(prompt)
+
+        content = response.content
+        
+        # Remove markdown code blocks if present
+        if content.startswith("```"):
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+            content = content.strip()
+
+        result = json.loads(content)
         tree = self._parse_tree_result(result, policy)
 
         # Set hierarchical metadata
@@ -706,7 +768,7 @@ Return a JSON object with the decision tree structure."""
 
     def _create_tree_generation_prompt(self, policy: SubPolicy) -> str:
         """
-        Create prompt for tree generation.
+        Create prompt for tree generation (fallback method - uses enhanced prompts via get_leaf_prompt).
 
         Args:
             policy: SubPolicy object
@@ -714,112 +776,16 @@ Return a JSON object with the decision tree structure."""
         Returns:
             Prompt string
         """
-        # Serialize conditions
-        conditions_text = "\n".join([
-            f"- {cond.description} (Logic: {cond.logic_type})"
-            for cond in policy.conditions
-        ])
-
-        # Serialize source references
-        sources_text = "\n".join([
-            f"- Page {ref.page_number}, Section: {ref.section}\n  Quote: {ref.quoted_text[:200]}..."
-            for ref in policy.source_references
-        ])
-
-        prompt = f"""Create a comprehensive decision tree for the following policy.
-
-Policy: {policy.title}
-Description: {policy.description}
-Level: {policy.level}
-
-Conditions:
-{conditions_text if conditions_text else "No explicit conditions defined - infer from description"}
-
-Source References:
-{sources_text}
-
-Instructions:
-1. Convert ALL policy conditions into clear eligibility questions
-2. For each question, determine the most appropriate question type:
-   - yes_no: Simple yes/no questions
-   - multiple_choice: Questions with 2-4 predefined options
-   - numeric_range: Questions about ages, amounts, durations
-   - text_input: Questions requiring text input (names, IDs)
-   - date: Questions about specific dates
-   - conditional: Complex questions with sub-conditions
-
-3. Create a logical flow that:
-   - Asks questions in the most efficient order
-   - Handles all possible answer combinations
-   - Leads to clear outcomes (approved, denied, refer_to_manual)
-
-4. For each question:
-   - Provide clear, user-friendly question text
-   - Include explanation of why this question matters
-   - Reference the source policy section
-   - Add help text if needed
-   - Specify validation rules for inputs
-
-5. Ensure the tree handles edge cases and complex logic (AND/OR conditions)
-
-6. Assign confidence scores based on:
-   - Clarity of source policy
-   - Completeness of logic
-   - Potential for ambiguity
-
-Return a JSON object with this structure:
-{{
-  "root_node": {{
-    "node_id": "unique_id",
-    "node_type": "question",  // or "outcome"
-    "question": {{
-      "question_id": "q1",
-      "question_text": "Are you currently employed?",
-      "question_type": "yes_no",
-      "explanation": "Employment status affects eligibility per Section 2.1",
-      "help_text": "Include full-time, part-time, and self-employment",
-      "page_number": 5,
-      "section": "Section 2.1",
-      "quoted_text": "exact source text"
-    }},
-    "children": {{
-      "yes": {{
-        "node_id": "node_2",
-        "node_type": "question",
-        ...
-      }},
-      "no": {{
-        "node_id": "node_3",
-        "node_type": "outcome",
-        "outcome": "Not eligible - employment required",
-        "outcome_type": "denied",
-        "page_number": 5,
-        "section": "Section 2.1",
-        "quoted_text": "source text",
-        "confidence_score": 0.95
-      }}
-    }},
-    "confidence_score": 0.9
-  }}
-}}
-
-For multiple choice questions, use this format:
-{{
-  "question_type": "multiple_choice",
-  "options": [
-    {{
-      "option_id": "opt1",
-      "label": "Full-time",
-      "value": "full_time",
-      "leads_to_node": "node_id"
-    }},
-    ...
-  ]
-}}
-
-Be thorough and create a complete decision tree that handles ALL scenarios."""
-
-        return prompt
+        # Use the enhanced leaf prompt template instead of old prompt
+        # This ensures consistency with hierarchical generation
+        return get_leaf_prompt(
+            policy_title=policy.title,
+            policy_description=policy.description,
+            policy_level=policy.level,
+            conditions=policy.conditions,
+            parent_context="",
+            context=f"Policy Level: {policy.level}\nConditions: {len(policy.conditions)}"
+        )
 
     def _parse_tree_result(self, result: Dict[str, Any], policy: SubPolicy) -> DecisionTree:
         """
@@ -1107,6 +1073,103 @@ Be thorough and create a complete decision tree that handles ALL scenarios."""
 
         logger.debug(f"[_extract_questions] Extraction complete. Total questions found: {len(questions)}")
         return questions
+
+    def _repair_json(self, content: str, policy_id: str) -> str:
+        """
+        Repair common JSON issues before parsing.
+        
+        Common issues:
+        1. Trailing commas in objects/arrays
+        2. Missing closing brackets
+        3. Unescaped quotes in strings
+        4. Comments (not valid JSON)
+        
+        Args:
+            content: JSON string to repair
+            policy_id: Policy ID for logging
+        
+        Returns:
+            Repaired JSON string
+        """
+        import re
+        
+        original_content = content
+        repairs_made = []
+        
+        # Issue 1: Remove trailing commas before closing braces/brackets
+        # Pattern: ,\s*} or ,\s*]
+        trailing_comma_pattern = r',(\s*[}\]])'
+        matches = re.findall(trailing_comma_pattern, content)
+        if matches:
+            content = re.sub(trailing_comma_pattern, r'\1', content)
+            repairs_made.append(f"removed {len(matches)} trailing commas")
+        
+        # Issue 2: Remove JavaScript-style comments
+        # Single-line comments: // ...
+        comment_pattern = r'//.*?$'
+        matches = re.findall(comment_pattern, content, re.MULTILINE)
+        if matches:
+            content = re.sub(comment_pattern, '', content, flags=re.MULTILINE)
+            repairs_made.append(f"removed {len(matches)} comments")
+        
+        # Issue 3: Fix common typos in JSON keywords
+        content = content.replace('"True"', 'true')
+        content = content.replace('"False"', 'false')
+        content = content.replace('"None"', 'null')
+        content = content.replace('"null"', 'null')
+        
+        # Issue 4: Remove zero-width characters and other invisible Unicode
+        content = content.replace('\u200b', '')  # Zero-width space
+        content = content.replace('\ufeff', '')  # Byte order mark
+        
+        if repairs_made:
+            logger.info(f"[JSON Repair] Policy {policy_id}: {', '.join(repairs_made)}")
+        
+        return content
+    
+    def _emergency_json_repair(self, content: str) -> str:
+        """
+        Emergency JSON repair for severely malformed JSON.
+        Attempts more aggressive fixes as last resort.
+        
+        Args:
+            content: Malformed JSON string
+        
+        Returns:
+            Repaired JSON string
+        """
+        import re
+        
+        # Try to find the last complete valid closing brace
+        # Sometimes LLM output is truncated
+        brace_count = 0
+        last_valid_pos = -1
+        
+        for i, char in enumerate(content):
+            if char == '{':
+                brace_count += 1
+            elif char == '}':
+                brace_count -= 1
+                if brace_count == 0:
+                    last_valid_pos = i + 1
+        
+        if last_valid_pos > 0 and last_valid_pos < len(content):
+            logger.warning(
+                f"[JSON Repair] Truncating content from {len(content)} to {last_valid_pos} chars "
+                f"(found complete JSON object)"
+            )
+            content = content[:last_valid_pos]
+        
+        # Remove any trailing incomplete content after last }
+        if content.rstrip().endswith('}'):
+            # Find position of last }
+            last_brace = content.rindex('}')
+            content = content[:last_brace + 1]
+        
+        # Try standard repair again
+        content = self._repair_json(content, "emergency_repair")
+        
+        return content
 
     async def optimize_tree(self, tree: DecisionTree) -> DecisionTree:
         """

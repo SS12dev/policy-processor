@@ -41,6 +41,9 @@ env/
 *.log
 logs/
 
+# Database
+data/
+
 # Testing
 .pytest_cache/
 .coverage

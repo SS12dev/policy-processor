@@ -1,8 +1,8 @@
 """
 Validation system with confidence scoring for policies and decision trees.
 """
-from typing import List, Set
-from openai import AsyncOpenAI
+from typing import List, Set, Optional
+from langchain_openai import ChatOpenAI
 from config.settings import settings
 from app.utils.logger import get_logger
 from app.models.schemas import (
@@ -20,15 +20,16 @@ logger = get_logger(__name__)
 class Validator:
     """Validates extracted policies and generated decision trees."""
 
-    def __init__(self, use_gpt4: bool = False):
+    def __init__(self, use_gpt4: bool = False, llm: Optional[ChatOpenAI] = None):
         """
         Initialize validator.
 
         Args:
-            use_gpt4: Whether to use GPT-4 for validation
+            use_gpt4: Whether to use GPT-4 for validation (unused for now)
+            llm: Optional pre-configured LLM client (unused for now)
         """
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
-        self.model = settings.openai_model_secondary if use_gpt4 else settings.openai_model_primary
+        self.llm = llm
+        self.use_gpt4 = use_gpt4
 
     async def validate_all(
         self,

@@ -2,8 +2,8 @@
 Document intelligence analyzer for understanding document types and characteristics.
 """
 import re
-from typing import List, Dict, Any
-from openai import AsyncOpenAI
+from typing import List, Dict, Any, Optional
+from langchain_openai import ChatOpenAI
 from config.settings import settings
 from app.utils.logger import get_logger
 from app.core.pdf_processor import PDFPage
@@ -16,12 +16,17 @@ logger = get_logger(__name__)
 class DocumentAnalyzer:
     """Analyzes documents to understand their type, structure, and complexity."""
 
-    def __init__(self):
-        """Initialize document analyzer."""
-        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
+    def __init__(self, llm: Optional[ChatOpenAI] = None):
+        """
+        Initialize document analyzer.
+        
+        Args:
+            llm: Optional pre-configured LLM client. If not provided, will be initialized on first use.
+        """
+        self.llm = llm
 
     async def analyze_document(
-        self, pages: List[PDFPage], structure: Dict[str, Any]
+        self, pages: List[PDFPage], structure: Dict[str, Any], llm: Optional[ChatOpenAI] = None
     ) -> DocumentMetadata:
         """
         Analyze document to determine type, complexity, and characteristics.
@@ -29,11 +34,16 @@ class DocumentAnalyzer:
         Args:
             pages: List of PDFPage objects
             structure: Document structure information
+            llm: Optional LLM client to use for analysis
 
         Returns:
             DocumentMetadata object
         """
         logger.info("Analyzing document characteristics...")
+
+        # Use provided LLM or fall back to instance LLM
+        if llm is not None:
+            self.llm = llm
 
         start_time = datetime.utcnow()
 
@@ -115,14 +125,12 @@ Classify the document into ONE of these categories:
 
 Respond with ONLY the category name (e.g., "insurance" or "legal"), nothing else."""
 
-            response = await self.client.chat.completions.create(
-                model=settings.openai_model_primary,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=20,
-            )
+            if self.llm is None:
+                logger.warning("LLM not initialized, using UNKNOWN document type")
+                return DocumentType.UNKNOWN
 
-            doc_type_str = response.choices[0].message.content.strip().lower()
+            response = await self.llm.ainvoke(prompt)
+            doc_type_str = response.content.strip().lower()
 
             # Map to DocumentType enum
             type_mapping = {

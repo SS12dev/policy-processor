@@ -5,15 +5,13 @@ Uses LLM assistance to identify policy boundaries and prevent splitting policies
 import re
 import tiktoken
 import json
-from typing import List, Dict, Any
-from openai import AsyncOpenAI
+from typing import List, Dict, Any, Optional
+from langchain_openai import ChatOpenAI
 from app.utils.logger import get_logger
 from app.core.pdf_processor import PDFPage
 from config.settings import settings
 
 logger = get_logger(__name__)
-
-client = AsyncOpenAI(api_key=settings.openai_api_key)
 
 
 class DocumentChunk:
@@ -41,7 +39,13 @@ class DocumentChunk:
 class ChunkingStrategy:
     """Intelligent chunking strategy that respects semantic boundaries."""
 
-    def __init__(self, chunk_size: int = None, overlap: int = None, use_llm: bool = True):
+    def __init__(
+        self,
+        chunk_size: int = None,
+        overlap: int = None,
+        use_llm: bool = True,
+        llm: Optional[ChatOpenAI] = None,
+    ):
         """
         Initialize chunking strategy.
 
@@ -49,12 +53,14 @@ class ChunkingStrategy:
             chunk_size: Target chunk size in tokens
             overlap: Overlap size in tokens
             use_llm: Whether to use LLM for intelligent boundary detection
+            llm: Optional pre-configured LLM client
         """
         self.target_chunk_size = chunk_size or settings.target_chunk_tokens
         self.max_chunk_size = settings.max_chunk_tokens
         self.overlap = overlap or settings.chunk_overlap
         self.encoding = tiktoken.encoding_for_model("gpt-4")
         self.use_llm = use_llm
+        self.llm = llm
         logger.info(
             f"Init chunking: target={self.target_chunk_size}, max={self.max_chunk_size}, "
             f"overlap={self.overlap}, llm={use_llm}"
@@ -102,19 +108,21 @@ Focus on identifying clear, unambiguous patterns that indicate policy boundaries
 Return ONLY valid JSON, no markdown formatting."""
 
         try:
-            logger.debug(f"Calling {settings.openai_model_primary} API for structure analysis...")
-            response = await client.chat.completions.create(
-                model=settings.openai_model_primary,
-                messages=[
-                    {"role": "system", "content": "You are a document structure analysis expert. Respond only with valid JSON."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.1,
-                max_tokens=1000,
-            )
+            if self.llm is None:
+                logger.warning("LLM not initialized, using heuristics")
+                return {
+                    "document_type": "unknown",
+                    "policy_markers": [r"^\d+\.", r"^Section \d+", r"^Article \d+"],
+                    "hierarchy_indicators": [r"^\s*[a-z]\.", r"^\s*[ivx]+\.", r"^\s*\([0-9]+\)"],
+                    "boundary_rules": ["before_next_marker"],
+                    "context_keywords": ["coverage", "exclusion", "definition", "requirement"]
+                }
+
+            logger.debug("Calling LLM API for structure analysis...")
+            response = await self.llm.ainvoke(prompt)
 
             logger.debug("Received structure analysis response from LLM")
-            content = response.choices[0].message.content.strip()
+            content = response.content.strip()
 
             # Remove markdown code blocks if present
             if content.startswith("```"):

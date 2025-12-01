@@ -2,9 +2,332 @@
 Data models and schemas for policy document processing.
 """
 from pydantic import BaseModel, Field
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Union, Tuple
 from enum import Enum
 from datetime import datetime
+
+
+# ===== PDF Processing Models =====
+
+class ImageMetadata(BaseModel):
+    """Metadata for an extracted image."""
+    image_id: str = Field(..., description="Unique image identifier (hash)")
+    image_index: int = Field(..., description="Image index on page")
+    width: int = Field(..., description="Image width in pixels")
+    height: int = Field(..., description="Image height in pixels")
+    format: str = Field(..., description="Image format (PNG, JPEG, etc.)")
+    thumbnail_base64: Optional[str] = Field(default=None, description="Low-res thumbnail (max 200x200)")
+    position: Dict[str, float] = Field(default_factory=dict, description="Position on page (x0, y0, x1, y1)")
+    size_bytes: int = Field(..., description="Original image size in bytes")
+
+
+class TableMetadata(BaseModel):
+    """Metadata for an extracted table."""
+    table_index: int = Field(..., description="Table index on page")
+    row_count: int = Field(..., description="Number of rows")
+    col_count: int = Field(..., description="Number of columns")
+    preview_rows: List[List[str]] = Field(default_factory=list, description="First 3 rows for preview")
+    position: Dict[str, float] = Field(default_factory=dict, description="Position on page")
+    confidence: float = Field(default=0.8, description="Table detection confidence")
+
+
+class HeadingInfo(BaseModel):
+    """Information about a heading or section title."""
+    text: str = Field(..., description="Heading text")
+    level: int = Field(..., description="Estimated heading level (1-6)")
+    page_number: int = Field(..., description="Page where heading appears")
+    char_start: int = Field(..., description="Start character position in page text")
+    char_end: int = Field(..., description="End character position in page text")
+    font_size: Optional[float] = Field(default=None, description="Font size if available")
+    is_bold: bool = Field(default=False, description="Whether text is bold")
+    is_all_caps: bool = Field(default=False, description="Whether text is all caps")
+
+
+class TOCEntry(BaseModel):
+    """Table of Contents entry."""
+    title: str = Field(..., description="Section title")
+    page_number: int = Field(..., description="Page number from TOC")
+    level: int = Field(default=1, description="Heading level")
+    actual_page_number: Optional[int] = Field(default=None, description="Validated actual page")
+
+
+class SectionBoundary(BaseModel):
+    """Boundary information for a document section."""
+    section_id: str = Field(..., description="Section identifier")
+    title: str = Field(..., description="Section title")
+    start_page: int = Field(..., description="Starting page number")
+    end_page: int = Field(..., description="Ending page number")
+    heading_info: Optional[HeadingInfo] = Field(default=None, description="Associated heading")
+
+
+class PageLayoutInfo(BaseModel):
+    """Layout information for a page."""
+    width: float = Field(..., description="Page width in points")
+    height: float = Field(..., description="Page height in points")
+    orientation: str = Field(..., description="portrait or landscape")
+    column_count: int = Field(default=1, description="Number of text columns")
+    has_headers: bool = Field(default=False, description="Has header region")
+    has_footers: bool = Field(default=False, description="Has footer region")
+    margin_top: float = Field(default=0.0, description="Top margin estimate")
+    margin_bottom: float = Field(default=0.0, description="Bottom margin estimate")
+    text_density: float = Field(default=0.0, description="Text density (chars per sq inch)")
+
+
+class EnhancedPDFPage(BaseModel):
+    """Enhanced PDF page with comprehensive metadata."""
+    page_id: str = Field(..., description="Unique page identifier (doc_hash:pageN)")
+    page_number: int = Field(..., description="Page number (1-indexed)")
+    
+    # Text content
+    text: str = Field(..., description="Extracted text content")
+    text_preview: str = Field(..., description="First 250 chars for preview")
+    char_count: int = Field(..., description="Total character count")
+    approx_tokens: int = Field(..., description="Approximate token count")
+    
+    # Images
+    images_count: int = Field(default=0, description="Number of images on page")
+    images: List[ImageMetadata] = Field(default_factory=list, description="Image metadata")
+    
+    # Tables
+    tables_count: int = Field(default=0, description="Number of tables on page")
+    tables: List[TableMetadata] = Field(default_factory=list, description="Table metadata")
+    
+    # Layout and structure
+    layout_info: PageLayoutInfo = Field(..., description="Layout information")
+    headings: List[HeadingInfo] = Field(default_factory=list, description="Headings found on page")
+    
+    # OCR information
+    is_scanned: bool = Field(default=False, description="Whether page is scanned/image-based")
+    ocr_performed: bool = Field(default=False, description="Whether OCR was run")
+    ocr_confidence: Optional[float] = Field(default=None, description="OCR confidence score (0-1)")
+    ocr_language: Optional[str] = Field(default=None, description="OCR language used")
+    
+    # Importance scoring
+    importance_score: float = Field(default=0.5, description="Page importance score (0-1)")
+    has_policy_content: bool = Field(default=True, description="Contains actual policy content")
+    
+    # Error tracking
+    processing_errors: List[str] = Field(default_factory=list, description="Errors during processing")
+    warnings: List[str] = Field(default_factory=list, description="Warnings during processing")
+
+
+class EnhancedPDFMetadata(BaseModel):
+    """Comprehensive PDF document metadata."""
+    document_hash: str = Field(..., description="SHA256 hash of document")
+    total_pages: int = Field(..., description="Total page count")
+    
+    # Content flags
+    has_images: bool = Field(default=False, description="Document contains images")
+    has_tables: bool = Field(default=False, description="Document contains tables")
+    has_toc: bool = Field(default=False, description="Has table of contents")
+    is_encrypted: bool = Field(default=False, description="Document is/was encrypted")
+    
+    # PDF metadata
+    pdf_info: Dict[str, str] = Field(default_factory=dict, description="PDF metadata (title, author, etc.)")
+    pdf_version: Optional[str] = Field(default=None, description="PDF version")
+    
+    # Structure
+    headings: List[HeadingInfo] = Field(default_factory=list, description="All document headings")
+    toc_entries: List[TOCEntry] = Field(default_factory=list, description="Table of contents entries")
+    section_boundaries: List[SectionBoundary] = Field(default_factory=list, description="Section boundaries")
+    
+    # Statistics
+    total_images: int = Field(default=0, description="Total images across document")
+    total_tables: int = Field(default=0, description="Total tables across document")
+    scanned_pages_count: int = Field(default=0, description="Number of scanned pages")
+    page_token_estimates: List[int] = Field(default_factory=list, description="Token count per page")
+    
+    # Quality metrics
+    ocr_quality_score: float = Field(default=1.0, description="Overall OCR quality (0-1)")
+    extraction_quality: float = Field(default=1.0, description="Text extraction quality (0-1)")
+    
+    # Error tracking
+    page_errors: Dict[int, str] = Field(default_factory=dict, description="Errors by page number")
+    processing_warnings: List[str] = Field(default_factory=list, description="Processing warnings")
+    
+    # Processing stats
+    extraction_methods_used: List[str] = Field(default_factory=list, description="Extraction methods used")
+    processing_time_seconds: float = Field(..., description="Total processing time")
+    ocr_time_seconds: float = Field(default=0.0, description="Time spent on OCR")
+
+
+# ===== Document Analysis Models =====
+
+class PageContentType(str, Enum):
+    """Types of content found on a page."""
+    POLICY_CONTENT = "policy_content"           # Main policy text
+    DEFINITIONS = "definitions"                 # Definitions section
+    EXCLUSIONS = "exclusions"                   # Exclusions/limitations
+    COVERAGE = "coverage"                       # Coverage details
+    ELIGIBILITY = "eligibility"                 # Eligibility criteria
+    PROCEDURES = "procedures"                   # Procedures/processes
+    TABLE_OF_CONTENTS = "table_of_contents"     # TOC
+    REFERENCES = "references"                   # References section
+    BIBLIOGRAPHY = "bibliography"               # Bibliography
+    INDEX = "index"                            # Index
+    APPENDIX = "appendix"                      # Appendix
+    ADMINISTRATIVE = "administrative"           # Admin content (cover, disclaimers)
+    MIXED = "mixed"                            # Multiple content types
+    UNKNOWN = "unknown"                        # Cannot determine
+
+
+class PolicyBoundary(BaseModel):
+    """Information about policy boundaries within a page."""
+    page_number: int = Field(..., description="Page number")
+    policy_starts_here: bool = Field(default=False, description="New policy starts on this page")
+    policy_continues_from_previous: bool = Field(default=False, description="Policy continues from previous page")
+    policy_ends_here: bool = Field(default=False, description="Policy ends on this page")
+    policy_continues_to_next: bool = Field(default=False, description="Policy continues to next page")
+    split_point_char: Optional[int] = Field(default=None, description="Character offset where policy splits")
+    policy_ids: List[str] = Field(default_factory=list, description="Policy IDs present on this page")
+    heading_at_start: Optional[str] = Field(default=None, description="Heading text if policy starts here")
+
+
+class PageAnalysis(BaseModel):
+    """Detailed analysis of a single page."""
+    page_number: int = Field(..., description="Page number")
+    
+    # Content classification
+    primary_content_type: PageContentType = Field(..., description="Primary content type")
+    secondary_content_types: List[PageContentType] = Field(default_factory=list, description="Other content types")
+    
+    # Content quality scores
+    policy_content_ratio: float = Field(default=0.0, description="Ratio of policy content (0-1)")
+    administrative_content_ratio: float = Field(default=0.0, description="Ratio of admin content (0-1)")
+    filterable_content_ratio: float = Field(default=0.0, description="Ratio of content to filter (0-1)")
+    
+    # Policy boundaries
+    policy_boundary: PolicyBoundary = Field(..., description="Policy boundary information")
+    
+    # Continuity markers
+    starts_mid_sentence: bool = Field(default=False, description="Starts with incomplete sentence")
+    ends_mid_sentence: bool = Field(default=False, description="Ends with incomplete sentence")
+    has_list_continuation: bool = Field(default=False, description="Has continuing list items")
+    
+    # Structural elements
+    has_headings: bool = Field(default=False, description="Page contains headings")
+    has_numbered_items: bool = Field(default=False, description="Has numbered items/lists")
+    has_bullet_points: bool = Field(default=False, description="Has bullet points")
+    has_tables: bool = Field(default=False, description="Contains tables")
+    has_references: bool = Field(default=False, description="Contains references")
+    
+    # Content characteristics
+    is_dense_text: bool = Field(default=False, description="Dense paragraph text")
+    is_list_heavy: bool = Field(default=False, description="Mostly lists")
+    is_table_heavy: bool = Field(default=False, description="Mostly tables")
+    
+    # Filtering hints
+    should_include_in_extraction: bool = Field(default=True, description="Include in policy extraction")
+    requires_special_handling: bool = Field(default=False, description="Needs special processing")
+    chunk_priority: float = Field(default=0.5, description="Priority for chunking (0-1)")
+
+
+class ContentZone(BaseModel):
+    """A zone of similar content within the document."""
+    zone_id: str = Field(..., description="Unique zone identifier")
+    zone_type: PageContentType = Field(..., description="Type of content in this zone")
+    start_page: int = Field(..., description="Starting page number")
+    end_page: int = Field(..., description="Ending page number")
+    page_count: int = Field(..., description="Number of pages in zone")
+    
+    # Zone characteristics
+    heading_text: Optional[str] = Field(default=None, description="Zone heading/title")
+    has_subsections: bool = Field(default=False, description="Contains subsections")
+    nesting_level: int = Field(default=0, description="Nesting depth (0=top-level)")
+    
+    # Content quality
+    average_importance: float = Field(default=0.5, description="Average page importance in zone")
+    should_extract_policies: bool = Field(default=True, description="Extract policies from this zone")
+    
+    # Related zones
+    parent_zone_id: Optional[str] = Field(default=None, description="Parent zone if nested")
+    child_zone_ids: List[str] = Field(default_factory=list, description="Child zones")
+
+
+class PolicyFlowNode(BaseModel):
+    """A node in the policy flow graph."""
+    policy_id: str = Field(..., description="Policy identifier")
+    policy_title: str = Field(..., description="Policy title")
+    
+    # Location
+    start_page: int = Field(..., description="Starting page")
+    end_page: int = Field(..., description="Ending page")
+    spans_multiple_pages: bool = Field(default=False, description="Spans multiple pages")
+    
+    # Continuation tracking
+    continuation_points: List[int] = Field(default_factory=list, description="Pages where policy continues")
+    has_interruptions: bool = Field(default=False, description="Has interruptions (tables, etc.)")
+    
+    # Content characteristics
+    has_tables: bool = Field(default=False, description="Contains tables")
+    has_lists: bool = Field(default=False, description="Contains lists")
+    has_definitions: bool = Field(default=False, description="Contains definitions")
+    has_exclusions: bool = Field(default=False, description="Contains exclusions")
+    
+    # Hierarchy
+    nesting_level: int = Field(default=0, description="Nesting level (0=root)")
+    parent_policy_id: Optional[str] = Field(default=None, description="Parent policy ID")
+    child_policy_ids: List[str] = Field(default_factory=list, description="Child policy IDs")
+    
+    # Quality
+    estimated_confidence: float = Field(default=0.7, description="Estimated extraction confidence")
+
+
+class ReferenceInfo(BaseModel):
+    """Information about a reference within the document."""
+    reference_type: str = Field(..., description="internal|external|citation")
+    source_page: int = Field(..., description="Page where reference appears")
+    reference_text: str = Field(..., description="Reference text")
+    target_page: Optional[int] = Field(default=None, description="Target page if internal")
+    target_section: Optional[str] = Field(default=None, description="Target section")
+
+
+class EnhancedDocumentMetadata(BaseModel):
+    """Enhanced document metadata with comprehensive analysis."""
+    
+    # Basic document info (from previous DocumentMetadata)
+    document_type: 'DocumentType' = Field(..., description="Type of policy document")
+    total_pages: int = Field(..., description="Total number of pages")
+    complexity_score: float = Field(..., description="Document complexity (0-1)")
+    has_images: bool = Field(default=False, description="Whether document contains images")
+    has_tables: bool = Field(default=False, description="Whether document contains tables")
+    structure_type: str = Field(..., description="Document structure (numbered, hierarchical, etc.)")
+    language: str = Field(default="en", description="Document language")
+    processing_time_seconds: float = Field(..., description="Total processing time")
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    
+    # Enhanced analysis
+    page_analyses: List[PageAnalysis] = Field(default_factory=list, description="Per-page analysis")
+    content_zones: List[ContentZone] = Field(default_factory=list, description="Content zones")
+    policy_flow_map: List[PolicyFlowNode] = Field(default_factory=list, description="Policy flow graph")
+    policy_boundaries: List[PolicyBoundary] = Field(default_factory=list, description="Detected policy boundaries")
+    document_structure: Optional[Dict[str, Any]] = Field(default=None, description="Enhanced policy document structure analysis")
+    
+    # Content statistics
+    policy_pages_count: int = Field(default=0, description="Pages with policy content")
+    admin_pages_count: int = Field(default=0, description="Administrative pages")
+    mixed_pages_count: int = Field(default=0, description="Mixed content pages")
+    
+    # Zone statistics
+    main_policy_zone: Optional[ContentZone] = Field(default=None, description="Main policy content zone")
+    definitions_zone: Optional[ContentZone] = Field(default=None, description="Definitions zone")
+    exclusions_zone: Optional[ContentZone] = Field(default=None, description="Exclusions zone")
+    references_zone: Optional[ContentZone] = Field(default=None, description="References zone")
+    
+    # Reference tracking
+    references: List[ReferenceInfo] = Field(default_factory=list, description="Document references")
+    has_internal_references: bool = Field(default=False, description="Has internal cross-references")
+    has_external_references: bool = Field(default=False, description="Has external references")
+    
+    # Chunking guidance
+    recommended_chunk_boundaries: List[Tuple[int, int]] = Field(default_factory=list, description="Recommended (start, end) page pairs")
+    pages_to_filter: List[int] = Field(default_factory=list, description="Pages to filter/exclude")
+    pages_requiring_special_handling: List[int] = Field(default_factory=list, description="Pages needing special processing")
+    
+    # Quality indicators
+    overall_extractability_score: float = Field(default=0.7, description="How extractable is this document (0-1)")
+    estimated_policy_count: int = Field(default=0, description="Estimated number of policies")
+    confidence_in_structure: float = Field(default=0.7, description="Confidence in structure analysis (0-1)")
 
 
 class DocumentType(str, Enum):
@@ -290,6 +613,82 @@ class ProcessingResponse(BaseModel):
     validation_result: ValidationResult = Field(..., description="Validation results")
     processing_stats: Dict[str, Any] = Field(default_factory=dict, description="Processing statistics")
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+# ===== Enhanced Chunking Models =====
+
+class PolicyChunkMetadata(BaseModel):
+    """Metadata for a policy-aware chunk."""
+    chunk_id: int = Field(..., description="Chunk identifier")
+    start_page: int = Field(..., description="Starting page number")
+    end_page: int = Field(..., description="Ending page number")
+    policy_ids: List[str] = Field(default_factory=list, description="Policy IDs in chunk")
+    content_zones: List[str] = Field(default_factory=list, description="Content zone IDs")
+    token_count: int = Field(..., description="Token count")
+    has_definitions: bool = Field(default=False, description="Contains definitions")
+    has_complete_context: bool = Field(default=False, description="Has complete context")
+    continuity_preserved: bool = Field(default=True, description="Semantic continuity preserved")
+    heading: Optional[str] = Field(default=None, description="Primary heading/title")
+    is_multi_page: bool = Field(default=False, description="Spans multiple pages")
+    boundary_type: str = Field(default="policy", description="Type of boundary (policy/zone/page)")
+    zone_id: Optional[str] = Field(default=None, description="Associated zone ID if zone_split")
+
+
+class DuplicatePolicyCandidate(BaseModel):
+    """Candidate duplicate policy detected across chunks."""
+    policy_id_1: str = Field(..., description="First policy ID")
+    policy_id_2: str = Field(..., description="Second policy ID")
+    similarity_score: float = Field(..., description="Similarity score (0-1)")
+    chunk_id_1: int = Field(..., description="First chunk ID")
+    chunk_id_2: int = Field(..., description="Second chunk ID")
+    merge_recommendation: str = Field(..., description="Merge recommendation")
+
+
+class ContextValidationResult(BaseModel):
+    """Results of context completeness validation."""
+    total_chunks: int = Field(..., description="Total chunks validated")
+    complete_chunks: int = Field(..., description="Chunks with complete context")
+    incomplete_chunks: int = Field(..., description="Chunks missing context")
+    definition_coverage_pct: float = Field(..., description="Percentage with definitions")
+    incomplete_chunk_details: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Details of incomplete chunks"
+    )
+
+
+class ChunkingStatistics(BaseModel):
+    """Statistics about the chunking process."""
+    total_chunks: int = Field(..., description="Total chunks created")
+    total_tokens: int = Field(..., description="Total token count")
+    avg_tokens_per_chunk: float = Field(..., description="Average tokens per chunk")
+    max_tokens: int = Field(..., description="Maximum chunk size")
+    min_tokens: int = Field(..., description="Minimum chunk size")
+    filtered_pages_count: int = Field(..., description="Number of pages filtered")
+    policy_pages_count: int = Field(..., description="Number of policy pages processed")
+    unique_policies_count: int = Field(..., description="Number of unique policies")
+    duplicate_candidates_count: int = Field(..., description="Potential duplicates found")
+    chunks_with_definitions: int = Field(..., description="Chunks containing definitions")
+    chunks_with_complete_context: int = Field(..., description="Chunks with complete context")
+    boundary_type_distribution: Dict[str, int] = Field(
+        default_factory=dict,
+        description="Distribution of boundary types"
+    )
+
+
+class EnhancedChunkingResult(BaseModel):
+    """Complete result of enhanced chunking process."""
+    chunks: List[PolicyChunkMetadata] = Field(..., description="Created chunks")
+    filtered_pages: List[int] = Field(default_factory=list, description="Filtered page numbers")
+    duplicate_candidates: List[DuplicatePolicyCandidate] = Field(
+        default_factory=list,
+        description="Potential duplicate policies"
+    )
+    context_validation: ContextValidationResult = Field(..., description="Context validation results")
+    statistics: ChunkingStatistics = Field(..., description="Chunking statistics")
+    chunking_method: str = Field(
+        default="enhanced_policy_aware",
+        description="Chunking method used"
+    )
 
 
 # Update forward references

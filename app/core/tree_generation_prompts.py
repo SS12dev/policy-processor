@@ -6,6 +6,7 @@ These prompts guide the LLM to create decision trees with:
 - Complete path coverage
 - AND/OR conditional groups
 - Proper outcome nodes
+- **VALID JSON** (no trailing commas, proper formatting)
 """
 
 DECISION_TREE_SYSTEM_PROMPT = """You are an expert at analyzing policy documents and creating comprehensive decision trees with conditional routing logic.
@@ -17,8 +18,17 @@ Your task is to convert policy requirements into a structured decision tree wher
 4. Each node has complete routing information
 
 OUTPUT FORMAT:
-You must return a valid JSON object with this exact structure:
+You must return a **VALID JSON object** - NO trailing commas, NO comments, NO truncation.
 
+CRITICAL JSON RULES:
+- ❌ NO trailing commas: "section": "Title", ← WRONG
+- ✅ Correct format: "section": "Title" ← RIGHT (no comma before })
+- ❌ NO comments in JSON: // this is wrong
+- ✅ Complete all brackets: every { must have matching }
+- ❌ NO truncation: finish the entire JSON structure
+- ✅ Validate JSON before returning
+
+REQUIRED STRUCTURE:
 {
   "root_node": {
     "node_id": "root",
@@ -81,6 +91,13 @@ CRITICAL REQUIREMENTS:
 4. Include source references with page numbers
 5. Keep questions clear and unambiguous
 6. Ensure logical flow matches policy intent
+7. **RETURN VALID JSON** - check for trailing commas and complete all brackets
+
+SIZE LIMITS:
+- Keep trees FOCUSED and MANAGEABLE (max 8-10 questions)
+- If policy is complex, prioritize the MOST IMPORTANT criteria
+- Use outcome nodes with detailed explanations rather than endless questions
+- NEVER truncate JSON - complete the entire structure properly
 
 EXAMPLE:
 {
@@ -146,72 +163,303 @@ EXAMPLE:
 IMPORTANT: Ensure EVERY question node has routing for ALL possible answers. Never leave paths incomplete."""
 
 
-AGGREGATOR_TREE_PROMPT_TEMPLATE = """Generate a ROUTING decision tree for this aggregator policy that determines which child policy applies.
+AGGREGATOR_TREE_PROMPT_TEMPLATE = """Generate a ROUTING decision tree for this aggregator policy.
 
-Policy: {policy_title}
+=== AGGREGATOR POLICY ===
+Policy Title: {policy_title}
 Description: {policy_description}
 
-This is an AGGREGATOR policy with {num_children} child policies:
+This is an **AGGREGATOR** policy that routes to {num_children} child policies:
 {child_list}
 
-Create a decision tree that:
-1. Asks questions to determine which child policy applies
-2. Routes to the appropriate child policy based on answers
-3. Handles cases where multiple policies might apply
-4. Has clear routing logic for all scenarios
+=== YOUR TASK ===
+Create a simple ROUTING tree that:
+1. **Asks 1-2 questions** to determine which child policy applies
+2. **Routes to the appropriate child policy** based on the answer
+3. **Handles edge cases** where no policy applies or multiple apply
+4. **Uses clear, scenario-based questions** (not complex eligibility checks)
 
-The tree should route to child policies using "router" type nodes:
+=== ROUTING STRATEGY ===
+For aggregator policies, use **scenario-based routing**:
+- Ask: "Which scenario best describes your situation?"
+- Provide: Multiple choice with one option per child policy
+- Route: Each option leads to a "refer_to_manual" outcome pointing to child policy
+
+=== EXAMPLE STRUCTURE ===
 {{
-  "node_type": "router",
-  "outcome": "Route to: {child_policy_title}",
-  "outcome_type": "refer_to_manual",
-  "child_policy_references": ["{child_policy_id}"]
+  "root_node": {{
+    "node_id": "scenario_select",
+    "node_type": "question",
+    "question": {{
+      "question_id": "q1",
+      "question_text": "Which of the following scenarios best describes your situation?",
+      "question_type": "multiple_choice",
+      "explanation": "This policy covers multiple scenarios - please select the one that applies to you",
+      "help_text": "Choose the option that most closely matches your specific situation",
+      "options": [
+        {{
+          "option_id": "opt1",
+          "label": "First Bariatric Surgery (No Prior Surgery)",
+          "value": "first_surgery",
+          "leads_to_node": "outcome_first_surgery"
+        }},
+        {{
+          "option_id": "opt2",
+          "label": "Revision of Prior Bariatric Surgery",
+          "value": "revision_surgery",
+          "leads_to_node": "outcome_revision"
+        }},
+        {{
+          "option_id": "opt3",
+          "label": "Adolescent Patient (Under 18)",
+          "value": "adolescent",
+          "leads_to_node": "outcome_adolescent"
+        }}
+      ]
+    }},
+    "children": {{
+      "first_surgery": {{
+        "node_id": "outcome_first_surgery",
+        "node_type": "outcome",
+        "outcome": "REFER TO: First Bariatric Surgery Policy - Review detailed eligibility criteria for initial surgery",
+        "outcome_type": "refer_to_manual",
+        "child_policy_references": ["bariatric_surgery_first_procedure"],
+        "confidence_score": 0.90
+      }},
+      "revision_surgery": {{
+        "node_id": "outcome_revision",
+        "node_type": "outcome",
+        "outcome": "REFER TO: Bariatric Surgery Revision Policy - Review criteria for revision procedures",
+        "outcome_type": "refer_to_manual",
+        "child_policy_references": ["bariatric_surgery_revision"],
+        "confidence_score": 0.90
+      }},
+      "adolescent": {{
+        "node_id": "outcome_adolescent",
+        "node_type": "outcome",
+        "outcome": "REFER TO: Adolescent Bariatric Surgery Policy - Special criteria apply for patients under 18",
+        "outcome_type": "refer_to_manual",
+        "child_policy_references": ["bariatric_surgery_adolescent"],
+        "confidence_score": 0.90
+      }}
+    }},
+    "confidence_score": 0.92
+  }}
 }}
 
+=== CRITICAL GUIDELINES ===
+1. **KEEP IT SIMPLE**: Routing trees should be 1-2 questions max
+2. **SCENARIO-BASED**: Ask "which scenario" not detailed eligibility
+3. **CLEAR OPTIONS**: Each child policy gets one clear option
+4. **REFER OUTCOMES**: All outcomes should be "refer_to_manual" type
+5. **CHILD REFERENCES**: Include "child_policy_references" array with child policy IDs
+6. **NO TRAILING COMMAS**: Validate JSON structure
+
 Source Document Context:
 {context}
 
-Generate a complete routing tree with:
-- Questions that determine applicable child policy
-- Clear routing for each answer path
-- Fallback routing for edge cases
-- Source references to policy text
+=== FINAL INSTRUCTIONS ===
+1. Create a simple multiple-choice question with one option per child policy
+2. Each option routes to an outcome that references the child policy
+3. Add a fallback option for "None of the above" → manual review
+4. Return ONLY the JSON object
+5. **VALIDATE JSON** - no trailing commas!
 
-Return only the JSON object, no additional text."""
+Generate the routing tree now:"""
 
 
-LEAF_TREE_PROMPT_TEMPLATE = """Generate a comprehensive ELIGIBILITY decision tree for this policy.
+LEAF_TREE_PROMPT_TEMPLATE = """Generate a comprehensive ELIGIBILITY decision tree for this specific policy.
 
-Policy: {policy_title}
+=== POLICY DETAILS ===
+Policy Title: {policy_title}
 Description: {policy_description}
-Level: {policy_level}
+Hierarchy Level: {policy_level}
 {parent_context}
 
-Policy Conditions:
+=== POLICY CONDITIONS ===
 {conditions_text}
 
-Create a decision tree that:
-1. Asks questions to verify EACH condition
-2. Routes based on answers to determine eligibility
-3. Leads to clear outcomes (approved, denied, requires review)
-4. Covers ALL policy requirements
+=== YOUR TASK ===
+Create a complete decision tree that:
+1. **Asks ONE eligibility question PER major condition**
+2. **Routes based on YES/NO answers** to determine eligibility
+3. **Leads to CLEAR OUTCOMES**: approved, denied, or requires_review
+4. **Covers ALL policy requirements** from the conditions above
+5. **Uses proper JSON structure** with NO trailing commas
+
+=== IMPORTANT GUIDELINES ===
+- START with the MOST IMPORTANT/FILTERING condition first (e.g., BMI threshold, age requirement)
+- ASK SPECIFIC, MEASURABLE questions (not vague "do you meet criteria")
+- For NUMERIC conditions: Use "numeric_range" question type with specific thresholds
+- For DATE conditions: Use "date" question type
+- For MULTIPLE criteria: Create separate questions for each
+- For AND conditions: ALL must pass → ask sequentially, fail fast on first "no"
+- For OR conditions: ANY can pass → ask each, route to approval on first "yes"
+
+=== EXAMPLE STRUCTURE ===
+For a policy with conditions: "BMI ≥40" AND "Age 18-65" AND "6 months supervised weight loss"
+
+{{
+  "root_node": {{
+    "node_id": "bmi_check",
+    "node_type": "question",
+    "question": {{
+      "question_id": "q1",
+      "question_text": "What is your current Body Mass Index (BMI)?",
+      "question_type": "numeric_range",
+      "explanation": "Bariatric surgery requires a minimum BMI of 40 (or 35-39.9 with comorbidities)",
+      "help_text": "BMI is calculated as weight (kg) / height (m)². Ask your doctor if unsure.",
+      "source_references": [{{
+        "page_number": 2,
+        "section": "Medical Necessity Criteria",
+        "quoted_text": "Body Mass Index of 40 or greater"
+      }}],
+      "validation_rules": {{
+        "min": 0,
+        "max": 100,
+        "required": true
+      }}
+    }},
+    "children": {{
+      ">=40": {{
+        "node_id": "age_check",
+        "node_type": "question",
+        "question": {{
+          "question_id": "q2",
+          "question_text": "What is your age?",
+          "question_type": "numeric_range",
+          "explanation": "Policy requires patients to be between 18 and 65 years old",
+          "validation_rules": {{
+            "min": 0,
+            "max": 120,
+            "required": true
+          }}
+        }},
+        "children": {{
+          "18-65": {{
+            "node_id": "weight_loss_check",
+            "node_type": "question",
+            "question": {{
+              "question_id": "q3",
+              "question_text": "Have you completed at least 6 months of supervised weight loss attempts?",
+              "question_type": "yes_no",
+              "explanation": "Policy requires documented weight loss attempts before surgery"
+            }},
+            "children": {{
+              "yes": {{
+                "node_id": "outcome_approved",
+                "node_type": "outcome",
+                "outcome": "APPROVED: You meet all eligibility criteria for bariatric surgery",
+                "outcome_type": "approved",
+                "confidence_score": 0.95
+              }},
+              "no": {{
+                "node_id": "outcome_denied_weight_loss",
+                "node_type": "outcome",
+                "outcome": "DENIED: Must complete 6 months of supervised weight loss before qualifying",
+                "outcome_type": "denied",
+                "confidence_score": 0.95
+              }}
+            }},
+            "confidence_score": 0.92
+          }},
+          "<18": {{
+            "node_id": "outcome_denied_too_young",
+            "node_type": "outcome",
+            "outcome": "DENIED: Must be at least 18 years old to qualify",
+            "outcome_type": "denied",
+            "confidence_score": 0.98
+          }},
+          ">65": {{
+            "node_id": "outcome_review_age",
+            "node_type": "outcome",
+            "outcome": "REQUIRES REVIEW: Patients over 65 require additional medical assessment",
+            "outcome_type": "requires_documentation",
+            "confidence_score": 0.85
+          }}
+        }},
+        "confidence_score": 0.93
+      }},
+      "<40": {{
+        "node_id": "bmi_35_check",
+        "node_type": "question",
+        "question": {{
+          "question_id": "q4",
+          "question_text": "Is your BMI between 35 and 39.9?",
+          "question_type": "yes_no",
+          "explanation": "BMI 35-39.9 may qualify if you have comorbidities"
+        }},
+        "children": {{
+          "yes": {{
+            "node_id": "comorbidity_check",
+            "node_type": "question",
+            "question": {{
+              "question_id": "q5",
+              "question_text": "Do you have obesity-related comorbidities (diabetes, hypertension, sleep apnea)?",
+              "question_type": "yes_no",
+              "explanation": "BMI 35-39.9 requires comorbidities to qualify"
+            }},
+            "children": {{
+              "yes": {{
+                "node_id": "outcome_review_comorbid",
+                "node_type": "outcome",
+                "outcome": "REQUIRES REVIEW: BMI 35-39.9 with comorbidities - medical review needed",
+                "outcome_type": "requires_documentation",
+                "confidence_score": 0.80
+              }},
+              "no": {{
+                "node_id": "outcome_denied_no_comorbid",
+                "node_type": "outcome",
+                "outcome": "DENIED: BMI 35-39.9 requires documented comorbidities",
+                "outcome_type": "denied",
+                "confidence_score": 0.92
+              }}
+            }},
+            "confidence_score": 0.85
+          }},
+          "no": {{
+            "node_id": "outcome_denied_bmi",
+            "node_type": "outcome",
+            "outcome": "DENIED: BMI must be at least 35 to qualify for bariatric surgery",
+            "outcome_type": "denied",
+            "confidence_score": 0.98
+          }}
+        }},
+        "confidence_score": 0.90
+      }}
+    }},
+    "confidence_score": 0.95
+  }}
+}}
+
+=== CRITICAL REMINDERS ===
+1. **NO TRAILING COMMAS**: Check every object before closing brace
+2. **COMPLETE ALL PATHS**: Every YES/NO question needs BOTH yes AND no children
+3. **END WITH OUTCOMES**: Every branch must eventually reach an outcome node
+4. **CLEAR OUTCOME TYPES**:
+   - "approved": Meets ALL requirements
+   - "denied": Fails a requirement clearly stated in policy
+   - "requires_documentation": Needs additional proof/documents
+   - "pending_review": Edge case requiring human judgment
+   - "refer_to_manual": Complex case not covered by tree
+5. **INCLUDE SOURCE REFERENCES**: Add page_number, section, quoted_text where possible
+6. **APPROPRIATE CONFIDENCE SCORES**:
+   - 0.95-1.0: Clear yes/no criteria from policy
+   - 0.85-0.94: Somewhat subjective or requires interpretation
+   - 0.70-0.84: Ambiguous criteria or edge cases
 
 Source Document Context:
 {context}
 
-REQUIREMENTS:
-- Create one question per major condition
-- Ensure all YES/NO questions have both yes and no paths
-- Use decision nodes for complex AND/OR logic
-- Every path must end in an outcome node
-- Include exact quotes from policy document
-- Assign appropriate outcome types
+=== FINAL INSTRUCTIONS ===
+1. Read ALL policy conditions carefully
+2. Create ONE question per major condition
+3. Route logically based on answers
+4. Ensure EVERY path has an outcome
+5. Return ONLY the JSON object (no explanatory text before/after)
+6. **VALIDATE your JSON** before returning - check for trailing commas!
 
-For AND conditions: All must be true for approval
-For OR conditions: Any one being true allows approval
-
-Generate a complete decision tree with proper routing.
-Return only the JSON object, no additional text."""
+Generate the complete decision tree now:"""
 
 
 def get_aggregator_prompt(
@@ -226,13 +474,16 @@ def get_aggregator_prompt(
         for child in child_policies
     ])
 
-    return AGGREGATOR_TREE_PROMPT_TEMPLATE.format(
+    # Combine system prompt with specific instructions
+    specific_prompt = AGGREGATOR_TREE_PROMPT_TEMPLATE.format(
         policy_title=policy_title,
         policy_description=policy_description,
         num_children=len(child_policies),
         child_list=child_list,
         context=context
     )
+    
+    return f"{DECISION_TREE_SYSTEM_PROMPT}\n\n{specific_prompt}"
 
 
 def get_leaf_prompt(
@@ -251,7 +502,8 @@ def get_leaf_prompt(
 
     parent_info = f"Parent Policy: {parent_context}" if parent_context else "This is a root-level policy"
 
-    return LEAF_TREE_PROMPT_TEMPLATE.format(
+    # Combine system prompt with specific instructions
+    specific_prompt = LEAF_TREE_PROMPT_TEMPLATE.format(
         policy_title=policy_title,
         policy_description=policy_description,
         policy_level=policy_level,
@@ -259,6 +511,8 @@ def get_leaf_prompt(
         conditions_text=conditions_text,
         context=context
     )
+    
+    return f"{DECISION_TREE_SYSTEM_PROMPT}\n\n{specific_prompt}"
 
 
 VALIDATION_PROMPT = """Review this decision tree for completeness and correctness:

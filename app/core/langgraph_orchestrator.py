@@ -18,8 +18,11 @@ from app.core.graph_nodes import (
     generate_trees_node,
     validate_node,
     retry_failed_trees_node,
+    verification_node,
+    refinement_node,
     complete_node,
     should_retry,
+    should_refine,
     check_for_errors,
 )
 from app.models.schemas import ProcessingRequest, ProcessingResponse, ProcessingStage
@@ -56,6 +59,9 @@ class LangGraphOrchestrator:
         workflow.add_node("generate_trees", generate_trees_node)
         workflow.add_node("validate", validate_node)
         workflow.add_node("retry_trees", retry_failed_trees_node)
+        workflow.add_node("verification", verification_node)
+        workflow.add_node("check_refinement", lambda state: state)  # Pass-through node for routing
+        workflow.add_node("refinement", refinement_node)
         workflow.add_node("complete", complete_node)
 
         # Set entry point
@@ -107,25 +113,42 @@ class LangGraphOrchestrator:
             }
         )
 
-        # Add conditional routing after validation for retry logic
+        # Add conditional routing after validation for retry logic OR verification
         workflow.add_conditional_edges(
             "validate",
             should_retry,
             {
                 "retry": "retry_trees",
-                "complete": "complete"
+                "complete": "verification"  # Changed: go to verification instead of complete
             }
         )
 
         # After retry, validate again
         workflow.add_edge("retry_trees", "validate")
+        
+        # Add verification node
+        workflow.add_edge("verification", "check_refinement")
+        
+        # Add conditional routing for refinement
+        workflow.add_conditional_edges(
+            "check_refinement",
+            should_refine,
+            {
+                "refine": "refinement",
+                "reverify": "verification",  # Re-verify after refinement
+                "complete": "complete"
+            }
+        )
+        
+        # Add refinement node
+        workflow.add_edge("refinement", "check_refinement")
 
         # Complete node is the end
         workflow.add_edge("complete", END)
 
         # Compile the graph
         compiled_graph = workflow.compile()
-        logger.info("LangGraph workflow compiled successfully with 8 nodes")
+        logger.info("LangGraph workflow compiled successfully with 10 nodes (added verification & refinement)")
 
         return compiled_graph
 
@@ -260,9 +283,9 @@ class LangGraphOrchestrator:
                 logger.error(f"[{job_id}] Processing failed: {errors}")
                 raise Exception(f"Processing failed: {errors[0]}")
 
-            # Update processing time in metadata
+            # Update processing time in metadata (metadata is a dict)
             if final_state.get("metadata"):
-                final_state["metadata"].processing_time_seconds = processing_time
+                final_state["metadata"]["processing_time_seconds"] = processing_time
 
             # Update processing stats
             if final_state.get("processing_stats"):

@@ -1,0 +1,88 @@
+[
+  {
+    "identifier": "decision_making",
+    "prefix": "DM",
+    "description": "Decision Making Agent for processing prior authorization decisions",
+    "streaming_enabled": false,
+    "type": "decision",
+    "tags": [
+      "medical",
+      "decision",
+      "prior-authorization",
+      "approval",
+      "denial"
+    ],
+    "protocol": "a2a",
+    "configs": [
+      {
+        "name": "AGENT_NAME",
+        "required": true,
+        "display_name": "Agent Name",
+        "description": "Name of the agent to be deployed",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "AGENT_HOST",
+        "required": false,
+        "display_name": "Agent Host",
+        "description": "Host for the agent server",
+        "type": "string",
+        "sensitive": false,
+        "default_value": "localhost"
+      },
+      {
+        "name": "AGENT_PORT",
+        "required": false,
+        "display_name": "Agent Port",
+        "description": "Port for the agent server",
+        "type": "number",
+        "sensitive": false,
+        "default_value": "10003"
+      },
+      {
+        "name": "AGENT_VERSION",
+        "required": false,
+        "display_name": "Agent Version",
+        "description": "Version of the agent",
+        "type": "string",
+        "sensitive": false,
+        "default_value": "1.0.0"
+      },
+      {
+        "name": "AGENT_DESCRIPTION",
+        "required": false,
+        "display_name": "Agent Description",
+        "description": "Description of the agent",
+        "type": "string",
+        "sensitive": false,
+        "default_value": "Makes prior authorization decisions based on policy criteria and patient data"
+      },
+      {
+        "name": "LLM_API_KEY",
+        "required": true,
+        "display_name": "LLM API Key",
+        "description": "API key for LLM service",
+        "type": "string",
+        "sensitive": true
+      },
+      {
+        "name": "LLM_ENDPOINT",
+        "required": true,
+        "display_name": "LiteLLM BASE",
+        "description": "Endpoint for LLM service",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "LLM_MODEL",
+        "required": true,
+        "display_name": "LLM Model",
+        "description": "Model to use for LLM service",
+        "type": "string",
+        "sensitive": false
+      }
+    ],
+    "group": "medical_decision"
+  }
+]

@@ -1,7 +1,7 @@
 """
-Enhanced Decision Tree Renderer
+Decision Tree Renderer
 
-This module provides enhanced visualization for decision trees with:
+This module provides visualization for decision trees with:
 - Hierarchical depth indicators
 - Clear parent-child relationships
 - IF-THEN answer path visualization
@@ -13,9 +13,9 @@ import streamlit as st
 from typing import Dict, List, Any, Optional
 
 
-def display_decision_tree_enhanced(tree: dict, tree_idx: int):
+def display_decision_tree(tree: dict, tree_idx: int):
     """
-    Display decision tree with enhanced depth visualization and clear indentation.
+    Display decision tree with depth visualization and clear indentation.
     
     Args:
         tree: Dictionary containing tree data with keys:

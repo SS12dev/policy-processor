@@ -273,7 +273,7 @@ class DecisionTreeGenerator:
     )
     async def generate_tree_for_policy(self, policy: SubPolicy) -> DecisionTree:
         """
-        Generate a decision tree for a single policy with enhanced validation.
+        Generate a decision tree for a single policy with validation.
 
         Args:
             policy: SubPolicy object
@@ -442,7 +442,7 @@ class DecisionTreeGenerator:
     )
     async def _generate_aggregator_tree(self, policy: SubPolicy) -> DecisionTree:
         """
-        Generate an aggregator tree that routes to child policy trees with enhanced validation.
+        Generate an aggregator tree that routes to child policy trees with validation.
 
         Args:
             policy: Aggregator policy with children
@@ -459,7 +459,7 @@ class DecisionTreeGenerator:
             policy, self.generation_plan
         )
 
-        # Create specialized prompt for aggregator trees using enhanced template
+        # Create specialized prompt for aggregator trees using template
         prompt = get_aggregator_prompt(
             policy_title=policy.title,
             policy_description=policy.description,
@@ -554,7 +554,7 @@ class DecisionTreeGenerator:
         # Get context
         context = self.aggregator.get_policy_context(policy, self.generation_plan)
 
-        # Create specialized prompt for leaf trees using enhanced template
+        # Create specialized prompt for leaf trees using template
         parent_context_str = context.get("navigation_hint", "")
         prompt = get_leaf_prompt(
             policy_title=policy.title,
@@ -768,7 +768,7 @@ Return a JSON object with the decision tree structure."""
 
     def _create_tree_generation_prompt(self, policy: SubPolicy) -> str:
         """
-        Create prompt for tree generation (fallback method - uses enhanced prompts via get_leaf_prompt).
+        Create prompt for tree generation (fallback method - uses prompts via get_leaf_prompt).
 
         Args:
             policy: SubPolicy object
@@ -776,7 +776,7 @@ Return a JSON object with the decision tree structure."""
         Returns:
             Prompt string
         """
-        # Use the enhanced leaf prompt template instead of old prompt
+        # Use the leaf prompt template instead of old prompt
         # This ensures consistency with hierarchical generation
         return get_leaf_prompt(
             policy_title=policy.title,

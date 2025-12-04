@@ -144,7 +144,7 @@ class UIBackendHandler:
             self.db_ops.save_results(job_id, results_data)
             logger.info(f"[UI] Saved full results for {job_id}")
 
-            # Return enhanced response
+            # Return response
             return {
                 **response,
                 "saved_to_database": True,

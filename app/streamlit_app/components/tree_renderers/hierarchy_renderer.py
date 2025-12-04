@@ -12,9 +12,9 @@ import streamlit as st
 from typing import Dict, List, Any, Optional
 
 
-def display_policy_hierarchy_enhanced(hierarchy: dict):
+def display_policy_hierarchy(hierarchy: dict):
     """
-    Display policy hierarchy with enhanced visualization and clear parent-child relationships.
+    Display policy hierarchy with visualization and clear parent-child relationships.
     
     Args:
         hierarchy: Dictionary containing hierarchy data with keys:
@@ -63,7 +63,7 @@ def display_policy_hierarchy_enhanced(hierarchy: dict):
     
     st.markdown("---")
     
-    # Display root policies with enhanced visuals
+    # Display root policies with visuals
     if "root_policies" in hierarchy and hierarchy["root_policies"]:
         for idx, policy in enumerate(hierarchy["root_policies"], 1):
             render_policy_card(policy, idx)

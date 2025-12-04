@@ -9,7 +9,7 @@ from operator import add
 from app.models.schemas import (
     ProcessingStage,
     DocumentMetadata,
-    EnhancedDocumentMetadata,
+    DocumentMetadata,
     PolicyHierarchy,
     DecisionTree,
     ValidationResult,
@@ -41,20 +41,20 @@ class ProcessingState(TypedDict):
 
     # Stage 1: PDF Parsing
     pdf_bytes: Optional[bytes]
-    pages: Optional[List[Any]]  # List[EnhancedPDFPage]
-    pdf_metadata: Optional[Dict[str, Any]]  # EnhancedPDFMetadata as dict
+    pages: Optional[List[Any]]  # List[PDFPage]
+    pdf_metadata: Optional[Dict[str, Any]]  # PDFMetadata as dict
     structure: Optional[Dict[str, Any]]
 
     # Stage 2: Document Analysis
     metadata: Optional[DocumentMetadata]  # Basic metadata for backward compatibility
-    enhanced_document_metadata: Optional[Dict[str, Any]]  # EnhancedDocumentMetadata as dict
+    document_metadata: Optional[Dict[str, Any]]  # DocumentMetadata as dict
     should_use_gpt4_extraction: Optional[bool]
     should_use_gpt4_trees: bool  # Always True
 
     # Stage 3: Chunking
     chunks: Optional[List[Any]]  # List[Chunk]
     chunk_summary: Optional[Dict[str, Any]]
-    chunking_metadata: Optional[Dict[str, Any]]  # Enhanced chunking metadata (filtered pages, duplicates, validation)
+    chunking_metadata: Optional[Dict[str, Any]]  # Chunking metadata (filtered pages, duplicates, validation)
 
     # Stage 4: Policy Extraction
     policy_hierarchy: Optional[PolicyHierarchy]
@@ -124,7 +124,7 @@ def create_initial_state(
         pdf_metadata=None,
         structure=None,
         metadata=None,
-        enhanced_document_metadata=None,
+        document_metadata=None,
         should_use_gpt4_extraction=None,
         should_use_gpt4_trees=True,  # Always use GPT-4 for trees
         chunks=None,

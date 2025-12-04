@@ -1,5 +1,5 @@
 """
-Enhanced prompts for decision tree generation with conditional routing.
+Prompts for decision tree generation with conditional routing.
 
 These prompts guide the LLM to create decision trees with:
 - Explicit routing logic

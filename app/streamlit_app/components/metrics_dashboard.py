@@ -27,7 +27,7 @@ def render_processing_metrics(
     policy_hierarchy = result.get("policy_hierarchy", {})
     decision_trees = result.get("decision_trees", [])
     validation = result.get("validation_result", {})
-    metadata = result.get("enhanced_document_metadata", {})
+    metadata = result.get("document_metadata", {})
     chunks = result.get("chunks", [])
     
     # Main metrics row

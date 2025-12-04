@@ -73,8 +73,8 @@ class PageLayoutInfo(BaseModel):
     text_density: float = Field(default=0.0, description="Text density (chars per sq inch)")
 
 
-class EnhancedPDFPage(BaseModel):
-    """Enhanced PDF page with comprehensive metadata."""
+class PDFPage(BaseModel):
+    """PDF page with comprehensive metadata."""
     page_id: str = Field(..., description="Unique page identifier (doc_hash:pageN)")
     page_number: int = Field(..., description="Page number (1-indexed)")
     
@@ -111,7 +111,7 @@ class EnhancedPDFPage(BaseModel):
     warnings: List[str] = Field(default_factory=list, description="Warnings during processing")
 
 
-class EnhancedPDFMetadata(BaseModel):
+class PDFMetadata(BaseModel):
     """Comprehensive PDF document metadata."""
     document_hash: str = Field(..., description="SHA256 hash of document")
     total_pages: int = Field(..., description="Total page count")
@@ -282,8 +282,8 @@ class ReferenceInfo(BaseModel):
     target_section: Optional[str] = Field(default=None, description="Target section")
 
 
-class EnhancedDocumentMetadata(BaseModel):
-    """Enhanced document metadata with comprehensive analysis."""
+class DocumentMetadata(BaseModel):
+    """Document metadata with comprehensive analysis."""
     
     # Basic document info (from previous DocumentMetadata)
     document_type: 'DocumentType' = Field(..., description="Type of policy document")
@@ -296,12 +296,12 @@ class EnhancedDocumentMetadata(BaseModel):
     processing_time_seconds: float = Field(..., description="Total processing time")
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     
-    # Enhanced analysis
+    # Analysis
     page_analyses: List[PageAnalysis] = Field(default_factory=list, description="Per-page analysis")
     content_zones: List[ContentZone] = Field(default_factory=list, description="Content zones")
     policy_flow_map: List[PolicyFlowNode] = Field(default_factory=list, description="Policy flow graph")
     policy_boundaries: List[PolicyBoundary] = Field(default_factory=list, description="Detected policy boundaries")
-    document_structure: Optional[Dict[str, Any]] = Field(default=None, description="Enhanced policy document structure analysis")
+    document_structure: Optional[Dict[str, Any]] = Field(default=None, description="Policy document structure analysis")
     
     # Content statistics
     policy_pages_count: int = Field(default=0, description="Pages with policy content")
@@ -423,19 +423,6 @@ class SourceReference(BaseModel):
     section: str = Field(..., description="Section identifier or title")
     quoted_text: str = Field(..., description="Exact text from the source")
     line_numbers: Optional[List[int]] = Field(default=None, description="Line numbers if available")
-
-
-class DocumentMetadata(BaseModel):
-    """Metadata about the processed document."""
-    document_type: DocumentType = Field(..., description="Type of policy document")
-    total_pages: int = Field(..., description="Total number of pages")
-    complexity_score: float = Field(..., description="Document complexity (0-1)")
-    has_images: bool = Field(default=False, description="Whether document contains images")
-    has_tables: bool = Field(default=False, description="Whether document contains tables")
-    structure_type: str = Field(..., description="Document structure (numbered, hierarchical, etc.)")
-    language: str = Field(default="en", description="Document language")
-    processing_time_seconds: float = Field(..., description="Total processing time")
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
 class PolicyCondition(BaseModel):
@@ -615,7 +602,7 @@ class ProcessingResponse(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 
-# ===== Enhanced Chunking Models =====
+# ===== Chunking Models =====
 
 class PolicyChunkMetadata(BaseModel):
     """Metadata for a policy-aware chunk."""
@@ -675,8 +662,8 @@ class ChunkingStatistics(BaseModel):
     )
 
 
-class EnhancedChunkingResult(BaseModel):
-    """Complete result of enhanced chunking process."""
+class ChunkingResult(BaseModel):
+    """Complete result of chunking process."""
     chunks: List[PolicyChunkMetadata] = Field(..., description="Created chunks")
     filtered_pages: List[int] = Field(default_factory=list, description="Filtered page numbers")
     duplicate_candidates: List[DuplicatePolicyCandidate] = Field(
@@ -686,7 +673,7 @@ class EnhancedChunkingResult(BaseModel):
     context_validation: ContextValidationResult = Field(..., description="Context validation results")
     statistics: ChunkingStatistics = Field(..., description="Chunking statistics")
     chunking_method: str = Field(
-        default="enhanced_policy_aware",
+        default="policy_aware",
         description="Chunking method used"
     )
 

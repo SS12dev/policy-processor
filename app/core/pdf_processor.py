@@ -1,5 +1,5 @@
 """
-Enhanced PDF processing module with robust extraction and comprehensive metadata.
+PDF processing module with robust extraction and comprehensive metadata.
 
 This module provides multi-strategy text extraction, intelligent OCR, image/table handling,
 heading detection, and structure analysis for policy documents.
@@ -19,8 +19,8 @@ from pdf2image import convert_from_bytes
 
 from app.utils.logger import get_logger
 from app.models.schemas import (
-    EnhancedPDFPage,
-    EnhancedPDFMetadata,
+    PDFPage,
+    PDFMetadata,
     ImageMetadata,
     TableMetadata,
     HeadingInfo,
@@ -34,9 +34,9 @@ from config.settings import settings
 logger = get_logger(__name__)
 
 
-class EnhancedPDFProcessor:
+class PDFProcessor:
     """
-    Enhanced PDF processor with robust extraction and comprehensive metadata.
+    PDF processor with robust extraction and comprehensive metadata.
     
     Features:
     - Multi-strategy text extraction (pdfplumber → PyMuPDF → PyPDF2)
@@ -57,7 +57,7 @@ class EnhancedPDFProcessor:
                  max_ocr_workers: int = 4,
                  thumbnail_size: Tuple[int, int] = (200, 200)):
         """
-        Initialize the enhanced PDF processor.
+        Initialize the PDF processor.
         
         Args:
             ocr_dpi: DPI for OCR image conversion
@@ -81,7 +81,7 @@ class EnhancedPDFProcessor:
             'headings_found': 0,
         }
     
-    def process_document(self, base64_pdf: str) -> Tuple[List[EnhancedPDFPage], EnhancedPDFMetadata]:
+    def process_document(self, base64_pdf: str) -> Tuple[List[PDFPage], PDFMetadata]:
         """
         Process a base64-encoded PDF document.
         
@@ -89,7 +89,7 @@ class EnhancedPDFProcessor:
             base64_pdf: Base64-encoded PDF string
             
         Returns:
-            Tuple of (list of EnhancedPDFPage objects, EnhancedPDFMetadata)
+            Tuple of (list of PDFPage objects, PDFMetadata)
         """
         start_time = time.time()
         
@@ -101,7 +101,7 @@ class EnhancedPDFProcessor:
             logger.info(f"[PDFProcessor] Processing document (hash: {document_hash[:12]}...)")
             
             # Initialize metadata structure
-            metadata = EnhancedPDFMetadata(
+            metadata = PDFMetadata(
                 document_hash=document_hash,
                 total_pages=0,
                 processing_time_seconds=0.0,
@@ -136,7 +136,7 @@ class EnhancedPDFProcessor:
             logger.error(f"[PDFProcessor] Fatal error processing document: {e}", exc_info=True)
             raise
     
-    def _extract_pdf_metadata(self, pdf_bytes: bytes, metadata: EnhancedPDFMetadata) -> EnhancedPDFMetadata:
+    def _extract_pdf_metadata(self, pdf_bytes: bytes, metadata: PDFMetadata) -> PDFMetadata:
         """Extract basic PDF metadata (title, author, encryption status, etc.)."""
         try:
             pdf_file = io.BytesIO(pdf_bytes)
@@ -169,7 +169,7 @@ class EnhancedPDFProcessor:
         
         return metadata
     
-    def _process_all_pages(self, pdf_bytes: bytes, document_hash: str) -> List[EnhancedPDFPage]:
+    def _process_all_pages(self, pdf_bytes: bytes, document_hash: str) -> List[PDFPage]:
         """
         Process all pages with graceful error handling.
         
@@ -221,8 +221,8 @@ class EnhancedPDFProcessor:
         total_pages: int, 
         document_hash: str,
         pdf_bytes: bytes
-    ) -> Optional[EnhancedPDFPage]:
-        """Process a single page and return EnhancedPDFPage object."""
+    ) -> Optional[PDFPage]:
+        """Process a single page and return PDF page object."""
         
         logger.debug(f"[PDFProcessor] Processing page {page_num}/{total_pages}")
         
@@ -265,7 +265,7 @@ class EnhancedPDFProcessor:
         has_policy_content = self._has_policy_content(text, page_num, total_pages)
         
         # Build the page object
-        pdf_page = EnhancedPDFPage(
+        pdf_page = PDFPage(
             page_id=page_id,
             page_number=page_num,
             text=text,
@@ -583,7 +583,7 @@ class EnhancedPDFProcessor:
         
         return True
     
-    def _run_parallel_ocr(self, pdf_bytes: bytes, pages: List[EnhancedPDFPage], pages_needing_ocr: List[Tuple[int, int]]):
+    def _run_parallel_ocr(self, pdf_bytes: bytes, pages: List[PDFPage], pages_needing_ocr: List[Tuple[int, int]]):
         """Run OCR on multiple pages in parallel."""
         ocr_start_time = time.time()
         
@@ -659,9 +659,9 @@ class EnhancedPDFProcessor:
             logger.warning(f"[PDFProcessor] OCR failed for page {page_number}: {e}")
             return None, 0.0
     
-    def _create_error_page(self, page_num: int, document_hash: str, error_msg: str) -> EnhancedPDFPage:
+    def _create_error_page(self, page_num: int, document_hash: str, error_msg: str) -> PDFPage:
         """Create a stub page for a failed page extraction."""
-        return EnhancedPDFPage(
+        return PDFPage(
             page_id=f"{document_hash}:p{page_num}",
             page_number=page_num,
             text="",
@@ -672,7 +672,7 @@ class EnhancedPDFProcessor:
             processing_errors=[error_msg],
         )
     
-    def _extract_document_structure(self, pages: List[EnhancedPDFPage], metadata: EnhancedPDFMetadata):
+    def _extract_document_structure(self, pages: List[PDFPage], metadata: PDFMetadata):
         """Extract high-level document structure: TOC, section boundaries, etc."""
         
         # Aggregate all headings
@@ -691,7 +691,7 @@ class EnhancedPDFProcessor:
         section_boundaries = self._build_section_boundaries(all_headings, len(pages))
         metadata.section_boundaries = section_boundaries
     
-    def _detect_and_parse_toc(self, pages: List[EnhancedPDFPage]) -> List[TOCEntry]:
+    def _detect_and_parse_toc(self, pages: List[PDFPage]) -> List[TOCEntry]:
         """
         Detect and parse table of contents.
         
@@ -775,7 +775,7 @@ class EnhancedPDFProcessor:
         logger.info(f"[PDFProcessor] Identified {len(boundaries)} section boundaries")
         return boundaries
     
-    def _compute_metadata_stats(self, pages: List[EnhancedPDFPage], metadata: EnhancedPDFMetadata):
+    def _compute_metadata_stats(self, pages: List[PDFPage], metadata: PDFMetadata):
         """Compute aggregate statistics for metadata."""
         
         metadata.total_images = sum(p.images_count for p in pages)
@@ -808,7 +808,7 @@ class EnhancedPDFProcessor:
     
     def create_source_reference(
         self, 
-        page: EnhancedPDFPage, 
+        page: PDFPage, 
         section: str, 
         quoted_text: str,
         char_start: int = 0,
@@ -818,7 +818,7 @@ class EnhancedPDFProcessor:
         Create a source reference with provenance information.
         
         Args:
-            page: EnhancedPDFPage object
+            page: PDFPage object
             section: Section identifier
             quoted_text: Quoted text from source
             char_start: Start character position

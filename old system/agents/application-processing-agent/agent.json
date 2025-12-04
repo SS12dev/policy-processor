@@ -1,0 +1,84 @@
+[
+  {
+    "identifier": "application_processing",
+    "prefix": "AP",
+    "description": "Application Processing Agent for extracting and validating medical application data",
+    "streaming_enabled": false,
+    "type": "processing",
+    "tags": [
+      "medical",
+      "application",
+      "extraction",
+      "validation",
+      "patient-data"
+    ],
+    "protocol": "a2a",
+    "configs": [
+      {
+        "name": "AGENT_NAME",
+        "required": true,
+        "display_name": "Agent Name",
+        "description": "Name of the agent to be deployed",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "AGENT_HOST",
+        "required": false,
+        "display_name": "Agent Host",
+        "description": "Host address for the agent",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "AGENT_PORT",
+        "required": false,
+        "display_name": "Agent Port",
+        "description": "Port for the agent",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "AGENT_VERSION",
+        "required": false,
+        "display_name": "Agent Version",
+        "description": "Version of the agent",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "AGENT_DESCRIPTION",
+        "required": false,
+        "display_name": "Agent Description",
+        "description": "Description of the agent",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "LLM_API_KEY",
+        "required": true,
+        "display_name": "LLM API Key",
+        "description": "API key for LLM service",
+        "type": "string",
+        "sensitive": true
+      },
+      {
+        "name": "LLM_ENDPOINT",
+        "required": true,
+        "display_name": "LLM Endpoint",
+        "description": "Endpoint for LLM service",
+        "type": "string",
+        "sensitive": false
+      },
+      {
+        "name": "LLM_MODEL",
+        "required": true,
+        "display_name": "LLM Model",
+        "description": "Model identifier for LLM service",
+        "type": "string",
+        "sensitive": false
+      }
+    ],
+    "group": "genhealth"
+  }
+]

@@ -1,6 +1,6 @@
 """
 Policy extraction engine with hierarchy detection.
-Supports both legacy DocumentChunk objects and enhanced chunk dictionaries.
+Supports both legacy DocumentChunk objects and chunk dictionaries.
 """
 import json
 import re
@@ -58,7 +58,7 @@ class PolicyExtractor:
         self, 
         chunks: List[Union[Dict, DocumentChunk]], 
         pages: List[Union[Dict, PDFPage]],
-        enhanced_metadata: Optional[Dict[str, Any]] = None
+        doc_metadata: Optional[Dict[str, Any]] = None
     ) -> PolicyHierarchy:
         """
         Extract all policies and their hierarchy from document chunks in parallel.
@@ -66,15 +66,15 @@ class PolicyExtractor:
         Args:
             chunks: List of chunk dicts or DocumentChunk objects
             pages: List of page dicts or PDFPage objects
-            enhanced_metadata: Optional enhanced document metadata for filtering/context
+            doc_metadata: Optional document metadata for filtering/context
 
         Returns:
             PolicyHierarchy object
         """
         import asyncio
 
-        # Filter chunks if enhanced metadata available
-        chunks_to_process = self._filter_chunks_for_extraction(chunks, enhanced_metadata)
+        # Filter chunks if metadata available
+        chunks_to_process = self._filter_chunks_for_extraction(chunks, doc_metadata)
         
         logger.info(f"Policy extraction: {len(chunks_to_process)}/{len(chunks)} chunks to process")
         
@@ -136,20 +136,20 @@ class PolicyExtractor:
     def _filter_chunks_for_extraction(
         self, 
         chunks: List[Union[Dict, Any]], 
-        enhanced_metadata: Optional[Dict[str, Any]]
+        doc_metadata: Optional[Dict[str, Any]]
     ) -> List[Union[Dict, Any]]:
         """
-        Filter chunks for extraction using enhanced metadata.
+        Filter chunks for extraction using metadata.
         Skip chunks with low context completeness or non-policy content.
         
         Args:
             chunks: List of chunks
-            enhanced_metadata: Enhanced document metadata
+            doc_metadata: Document metadata
         
         Returns:
             Filtered list of chunks
         """
-        if not enhanced_metadata:
+        if not doc_metadata:
             return chunks
         
         # Filter based on chunk metadata
@@ -871,7 +871,7 @@ Remember: QUALITY over QUANTITY. Extract 3-5 well-structured policies, NOT 15 fr
     
     def _are_titles_semantically_similar(self, title1: str, title2: str) -> bool:
         """
-        Enhanced semantic similarity check for policy titles.
+        Semantic similarity check for policy titles.
         Uses multiple signals to detect duplicates even if wording differs slightly.
         """
         # Normalize titles
@@ -1348,7 +1348,7 @@ Remember: QUALITY over QUANTITY. Extract 3-5 well-structured policies, NOT 15 fr
         if not text:
             return []
         
-        # Simple keyword extraction (can be enhanced with NLP)
+        # Simple keyword extraction (can be improved with NLP)
         words = re.findall(r'\b\w+\b', text.lower())
         
         # Remove common stop words

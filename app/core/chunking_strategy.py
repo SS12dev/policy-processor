@@ -1,9 +1,9 @@
 """
-Enhanced Intelligent Chunking Strategy for Policy Documents.
+Intelligent Chunking Strategy for Policy Documents.
 
 This module provides sophisticated chunking that leverages rich metadata from:
-1. EnhancedPDFProcessor - headings, TOC, section boundaries, page layout
-2. EnhancedDocumentAnalyzer - page content types, policy boundaries, content zones, 
+1. PDFProcessor - headings, TOC, section boundaries, page layout
+2. DocumentAnalyzer - page content types, policy boundaries, content zones, 
    semantic continuity, policy flow graph
 
 Key Features:
@@ -32,14 +32,14 @@ from langchain_openai import ChatOpenAI
 
 from app.utils.logger import get_logger
 from app.models.schemas import (
-    EnhancedPDFPage,
-    EnhancedPDFMetadata,
+    PDFPage,
+    PDFMetadata,
     PageContentType,
     PageAnalysis,
     PolicyBoundary,
     ContentZone,
     PolicyFlowNode,
-    EnhancedDocumentMetadata,
+    DocumentMetadata,
 )
 from config.settings import settings
 
@@ -47,7 +47,7 @@ logger = get_logger(__name__)
 
 
 # =============================================================================
-# Enhanced Data Models
+# Data Models
 # =============================================================================
 
 class PolicyChunk:
@@ -101,7 +101,7 @@ class DuplicatePolicyCandidate:
 
 
 class ChunkingResult:
-    """Complete result of the enhanced chunking process."""
+    """Complete result of the chunking process."""
     
     def __init__(
         self,
@@ -119,10 +119,10 @@ class ChunkingResult:
 
 
 # =============================================================================
-# Enhanced Chunking Strategy
+# Semantic Chunking Strategy
 # =============================================================================
 
-class EnhancedChunkingStrategy:
+class ChunkingStrategy:
     """
     Intelligent chunking strategy that uses rich document metadata to create
     semantically coherent chunks while preventing policy mixing and context loss.
@@ -136,7 +136,7 @@ class EnhancedChunkingStrategy:
         llm: Optional[ChatOpenAI] = None,
     ):
         """
-        Initialize enhanced chunking strategy.
+        Initialize semantic chunking strategy.
         
         Args:
             target_chunk_size: Target chunk size in tokens
@@ -151,7 +151,7 @@ class EnhancedChunkingStrategy:
         self.llm = llm
         
         logger.info(
-            f"Enhanced chunking init: target={self.target_chunk_size}, "
+            f"Semantic chunking init: target={self.target_chunk_size}, "
             f"max={self.max_chunk_size}, overlap={self.overlap}"
         )
     
@@ -161,9 +161,9 @@ class EnhancedChunkingStrategy:
     
     async def chunk_document(
         self,
-        pages: List[Dict[str, Any]],  # EnhancedPDFPage as dicts
-        pdf_metadata: Dict[str, Any],  # EnhancedPDFMetadata as dict
-        enhanced_doc_metadata: Dict[str, Any],  # EnhancedDocumentMetadata as dict
+        pages: List[Dict[str, Any]],  # PDFPage as dicts
+        pdf_metadata: Dict[str, Any],  # PDFMetadata as dict
+        doc_metadata: Dict[str, Any],  # DocumentMetadata as dict
     ) -> ChunkingResult:
         """
         Perform intelligent chunking using all available metadata.
@@ -176,21 +176,21 @@ class EnhancedChunkingStrategy:
         5. Generate aggregation recommendations
         
         Args:
-            pages: List of EnhancedPDFPage objects (as dicts)
-            pdf_metadata: EnhancedPDFMetadata (as dict)
-            enhanced_doc_metadata: EnhancedDocumentMetadata (as dict)
+            pages: List of PDFPage objects (as dicts)
+            pdf_metadata: PDFMetadata (as dict)
+            doc_metadata: DocumentMetadata (as dict)
         
         Returns:
             ChunkingResult with chunks, filtered pages, and metadata
         """
         logger.info("=" * 80)
-        logger.info("STARTING ENHANCED INTELLIGENT CHUNKING")
+        logger.info("STARTING INTELLIGENT CHUNKING")
         logger.info("=" * 80)
         
         # Step 1: Filter pages
         logger.info("\n[STEP 1] Filtering non-policy pages...")
         filtered_pages, policy_pages = self._filter_non_policy_pages(
-            pages, enhanced_doc_metadata
+            pages, doc_metadata
         )
         logger.info(
             f"Filtered {len(filtered_pages)} pages, "
@@ -199,18 +199,18 @@ class EnhancedChunkingStrategy:
         
         # Step 2: Extract document structure and content zones
         logger.info("\n[STEP 2] Extracting document structure and content zones...")
-        document_structure = enhanced_doc_metadata.get("document_structure", {})
+        document_structure = doc_metadata.get("document_structure", {})
         major_sections = document_structure.get("major_sections", [])
         
         # Fallback to old policy boundaries if document structure not available
         if not major_sections:
             logger.warning("Document structure not available, falling back to policy boundaries")
-            policy_boundaries = self._extract_policy_boundaries(enhanced_doc_metadata)
+            policy_boundaries = self._extract_policy_boundaries(doc_metadata)
         else:
             logger.info(f"Using document structure with {len(major_sections)} major sections")
             policy_boundaries = None  # Will use major_sections instead
         
-        content_zones = self._extract_content_zones(enhanced_doc_metadata)
+        content_zones = self._extract_content_zones(doc_metadata)
         logger.info(
             f"Found {len(major_sections) if major_sections else len(policy_boundaries or [])} sections, "
             f"{len(content_zones)} content zones"
@@ -224,14 +224,14 @@ class EnhancedChunkingStrategy:
             policy_boundaries,
             content_zones,
             pdf_metadata,
-            enhanced_doc_metadata,
+            doc_metadata,
         )
         logger.info(f"Created {len(chunks)} structure-aware chunks")
         
         # Step 4: Validate context completeness
         logger.info("\n[STEP 4] Validating context completeness...")
         context_validation = self._validate_context_completeness(
-            chunks, enhanced_doc_metadata
+            chunks, doc_metadata
         )
         logger.info(
             f"Context validation: {context_validation['complete_chunks']}/{len(chunks)} "
@@ -271,14 +271,14 @@ class EnhancedChunkingStrategy:
     def _filter_non_policy_pages(
         self,
         pages: List[Dict[str, Any]],
-        enhanced_doc_metadata: Dict[str, Any],
+        doc_metadata: Dict[str, Any],
     ) -> Tuple[List[int], List[Dict[str, Any]]]:
         """
         Filter out pages that don't contain policy content.
         
         Uses:
         - PageContentType classifications
-        - pages_to_filter from enhanced metadata
+        - pages_to_filter from metadata
         - Content quality scores
         
         Filters out:
@@ -289,23 +289,23 @@ class EnhancedChunkingStrategy:
         - Pages with low policy content ratio
         
         Args:
-            pages: List of EnhancedPDFPage dicts
-            enhanced_doc_metadata: EnhancedDocumentMetadata dict
+            pages: List of PDFPage dicts
+            doc_metadata: DocumentMetadata dict
         
         Returns:
             Tuple of (filtered_page_numbers, policy_pages)
         """
-        logger.info("Filtering non-policy pages using enhanced metadata...")
+        logger.info("Filtering non-policy pages using metadata...")
         
         # Get explicit filter guidance
         pages_to_filter_set = set(
-            enhanced_doc_metadata.get("pages_to_filter", [])
+            doc_metadata.get("pages_to_filter", [])
         )
         
         # Get page analyses
         page_analyses = {
             pa["page_number"]: pa
-            for pa in enhanced_doc_metadata.get("page_analyses", [])
+            for pa in doc_metadata.get("page_analyses", [])
         }
         
         # Filter criteria
@@ -367,10 +367,10 @@ class EnhancedChunkingStrategy:
     # =========================================================================
     
     def _extract_policy_boundaries(
-        self, enhanced_doc_metadata: Dict[str, Any]
+        self, doc_metadata: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
         """
-        Extract policy boundaries from enhanced metadata and convert to ranges.
+        Extract policy boundaries from metadata and convert to ranges.
         
         Converts per-page PolicyBoundary objects into ranged boundaries with:
         - policy_id
@@ -379,14 +379,12 @@ class EnhancedChunkingStrategy:
         - is_multi_page
         
         Args:
-            enhanced_doc_metadata: EnhancedDocumentMetadata dict
-        
+            doc_metadata: DocumentMetadata dict
+
         Returns:
             List of ranged policy boundary dicts
         """
-        boundaries = enhanced_doc_metadata.get("policy_boundaries", [])
-        
-        # Convert Pydantic objects to dicts if needed
+        boundaries = doc_metadata.get("policy_boundaries", [])        # Convert Pydantic objects to dicts if needed
         boundary_dicts = []
         for boundary in boundaries:
             if hasattr(boundary, 'dict'):
@@ -449,22 +447,21 @@ class EnhancedChunkingStrategy:
         return ranged_boundaries
     
     def _extract_content_zones(
-        self, enhanced_doc_metadata: Dict[str, Any]
+        self, doc_metadata: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
         """
-        Extract content zones from enhanced metadata.
+        Extract content zones from metadata.
         
         Content zones represent semantically coherent sections that should
         stay together during chunking.
         
         Args:
-            enhanced_doc_metadata: EnhancedDocumentMetadata dict
-        
+            doc_metadata: DocumentMetadata dict
+
         Returns:
             List of content zone dicts
         """
-        zones = enhanced_doc_metadata.get("content_zones", [])
-        
+        zones = doc_metadata.get("content_zones", [])
         logger.info(f"Extracted {len(zones)} content zones")
         for zone in zones:
             logger.debug(
@@ -485,8 +482,8 @@ class EnhancedChunkingStrategy:
         major_sections: List[Dict],
         policy_boundaries: Optional[List[Dict]],
         content_zones: List[Dict],
-        pdf_metadata: EnhancedPDFMetadata,
-        enhanced_doc_metadata: Dict,
+        pdf_metadata: PDFMetadata,
+        doc_metadata: Dict,
     ) -> List[PolicyChunk]:
         """
         Create chunks using document structure analysis (Phase 3 improvement).
@@ -507,7 +504,7 @@ class EnhancedChunkingStrategy:
             policy_boundaries: Old policy boundaries (fallback)
             content_zones: Semantic content zones
             pdf_metadata: PDF metadata
-            enhanced_doc_metadata: Document analysis metadata
+            doc_metadata: Document analysis metadata
         
         Returns:
             List of PolicyChunk objects
@@ -573,7 +570,7 @@ class EnhancedChunkingStrategy:
                         section,
                         content_zones,
                         pdf_metadata,
-                        enhanced_doc_metadata,
+                        doc_metadata,
                     )
                     chunks.append(chunk)
                     logger.info(
@@ -595,7 +592,7 @@ class EnhancedChunkingStrategy:
                 policy_boundaries,
                 content_zones,
                 pdf_metadata,
-                enhanced_doc_metadata,
+                doc_metadata,
             )
         
         return chunks
@@ -604,7 +601,7 @@ class EnhancedChunkingStrategy:
         self,
         section_pages: List[Dict],
         section: Dict,
-        pdf_metadata: EnhancedPDFMetadata,
+        pdf_metadata: PDFMetadata,
     ) -> str:
         """
         Build chunk text for a major section including all subsections.
@@ -647,8 +644,8 @@ class EnhancedChunkingStrategy:
         section_pages: List[Dict],
         section: Dict,
         content_zones: List[Dict],
-        pdf_metadata: EnhancedPDFMetadata,
-        enhanced_doc_metadata: Dict,
+        pdf_metadata: PDFMetadata,
+        doc_metadata: Dict,
     ) -> PolicyChunk:
         """
         Create a PolicyChunk from a major section.
@@ -659,7 +656,7 @@ class EnhancedChunkingStrategy:
             section: Section metadata
             content_zones: Content zones
             pdf_metadata: PDF metadata
-            enhanced_doc_metadata: Document metadata
+            doc_metadata: Document metadata
         
         Returns:
             PolicyChunk object
@@ -706,7 +703,7 @@ class EnhancedChunkingStrategy:
         section_pages: List[Dict],
         section: Dict,
         content_zones: List[Dict],
-        pdf_metadata: EnhancedPDFMetadata,
+        pdf_metadata: PDFMetadata,
         start_chunk_id: int,
     ) -> List[PolicyChunk]:
         """
@@ -823,7 +820,7 @@ class EnhancedChunkingStrategy:
         page_range: List[Dict],
         section: Dict,
         content_zones: List[Dict],
-        pdf_metadata: EnhancedPDFMetadata,
+        pdf_metadata: PDFMetadata,
     ) -> PolicyChunk:
         """
         Create a chunk from a page range.
@@ -894,7 +891,7 @@ class EnhancedChunkingStrategy:
         policy_boundaries: List[Dict[str, Any]],
         content_zones: List[Dict[str, Any]],
         pdf_metadata: Dict[str, Any],
-        enhanced_doc_metadata: Dict[str, Any],
+        doc_metadata: Dict[str, Any],
     ) -> List[PolicyChunk]:
         """
         Create chunks that respect policy boundaries and content zones.
@@ -912,7 +909,7 @@ class EnhancedChunkingStrategy:
             policy_boundaries: Detected policy boundaries
             content_zones: Semantic content zones
             pdf_metadata: PDF metadata
-            enhanced_doc_metadata: Document analysis metadata
+            doc_metadata: Document analysis metadata
         
         Returns:
             List of PolicyChunk objects
@@ -920,7 +917,7 @@ class EnhancedChunkingStrategy:
         logger.info("Creating policy-aware chunks...")
         
         # Get recommended chunk boundaries from metadata
-        recommended_boundaries = enhanced_doc_metadata.get(
+        recommended_boundaries = doc_metadata.get(
             "recommended_chunk_boundaries", []
         )
         logger.info(
@@ -987,7 +984,7 @@ class EnhancedChunkingStrategy:
                         boundary,
                         content_zones,
                         pdf_metadata,
-                        enhanced_doc_metadata,
+                        doc_metadata,
                     )
                     chunks.append(chunk)
                     logger.info(
@@ -1000,7 +997,7 @@ class EnhancedChunkingStrategy:
             # Fallback: Use content zones if no policy boundaries detected
             logger.info("No policy boundaries, using content-zone-based chunking")
             chunks = self._chunk_by_content_zones(
-                policy_pages, content_zones, pdf_metadata, enhanced_doc_metadata
+                policy_pages, content_zones, pdf_metadata, doc_metadata
             )
         
         logger.info(f"Created {len(chunks)} policy-aware chunks")
@@ -1053,7 +1050,7 @@ class EnhancedChunkingStrategy:
         boundary: Dict[str, Any],
         content_zones: List[Dict[str, Any]],
         pdf_metadata: Dict[str, Any],
-        enhanced_doc_metadata: Dict[str, Any],
+        doc_metadata: Dict[str, Any],
     ) -> PolicyChunk:
         """
         Create a PolicyChunk from a single policy boundary.
@@ -1064,7 +1061,7 @@ class EnhancedChunkingStrategy:
             boundary: Policy boundary
             content_zones: All content zones
             pdf_metadata: PDF metadata
-            enhanced_doc_metadata: Document metadata
+            doc_metadata: Document metadata
         
         Returns:
             PolicyChunk instance
@@ -1088,7 +1085,7 @@ class EnhancedChunkingStrategy:
         
         # Check context completeness
         has_complete_context = self._check_context_completeness(
-            chunk_text, boundary, enhanced_doc_metadata
+            chunk_text, boundary, doc_metadata
         )
         
         return PolicyChunk(
@@ -1284,7 +1281,7 @@ class EnhancedChunkingStrategy:
         pages: List[Dict[str, Any]],
         content_zones: List[Dict[str, Any]],
         pdf_metadata: Dict[str, Any],
-        enhanced_doc_metadata: Dict[str, Any],
+        doc_metadata: Dict[str, Any],
     ) -> List[PolicyChunk]:
         """
         Fallback chunking strategy using content zones when no policy boundaries exist.
@@ -1293,7 +1290,7 @@ class EnhancedChunkingStrategy:
             pages: Policy pages
             content_zones: Content zones
             pdf_metadata: PDF metadata
-            enhanced_doc_metadata: Document metadata
+            doc_metadata: Document metadata
         
         Returns:
             List of PolicyChunk objects
@@ -1361,7 +1358,7 @@ class EnhancedChunkingStrategy:
     def _validate_context_completeness(
         self,
         chunks: List[PolicyChunk],
-        enhanced_doc_metadata: Dict[str, Any],
+        doc_metadata: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
         Validate that chunks contain complete context (definitions, prerequisites).
@@ -1374,7 +1371,7 @@ class EnhancedChunkingStrategy:
         
         Args:
             chunks: List of PolicyChunk objects
-            enhanced_doc_metadata: Document metadata
+            doc_metadata: Document metadata
         
         Returns:
             Validation results dictionary
@@ -1569,7 +1566,7 @@ class EnhancedChunkingStrategy:
         """
         Calculate similarity between two chunks.
         
-        Uses simple token-based similarity (can be enhanced with embeddings).
+        Uses simple token-based similarity (can be improved with embeddings).
         
         Args:
             chunk1: First chunk
@@ -1642,7 +1639,7 @@ class EnhancedChunkingStrategy:
         Returns:
             List of tokens
         """
-        # Simple word tokenization (can be enhanced)
+        # Simple word tokenization (can be improved)
         words = re.findall(r'\b\w+\b', text.lower())
         # Remove common stop words for better similarity
         stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for'}
@@ -1734,7 +1731,7 @@ class EnhancedChunkingStrategy:
         self,
         chunk_text: str,
         boundary: Dict[str, Any],
-        enhanced_doc_metadata: Dict[str, Any],
+        doc_metadata: Dict[str, Any],
     ) -> bool:
         """
         Check if chunk has complete context (definitions, prerequisites).
@@ -1742,7 +1739,7 @@ class EnhancedChunkingStrategy:
         Args:
             chunk_text: Chunk text
             boundary: Policy boundary
-            enhanced_doc_metadata: Document metadata
+            doc_metadata: Document metadata
         
         Returns:
             True if context is complete

@@ -7,16 +7,16 @@ State updates are automatically streamed by LangGraph's astream() mechanism.
 import asyncio
 from typing import Union, Dict, Any, List
 
-from app.core.pdf_processor_enhanced import EnhancedPDFProcessor
-from app.core.document_analyzer_enhanced import EnhancedDocumentAnalyzer
-from app.core.chunking_strategy_enhanced import EnhancedChunkingStrategy
+from app.core.pdf_processor import PDFProcessor
+from app.core.document_analyzer import DocumentAnalyzer
+from app.core.chunking_strategy import ChunkingStrategy
 from app.core.policy_extractor import PolicyExtractor
 from app.core.decision_tree_generator import DecisionTreeGenerator
 from app.core.validator import Validator
 from app.core.document_verifier import DocumentVerifier
 from app.core.policy_refiner import PolicyRefiner
 from app.core.graph_state import ProcessingState
-from app.models.schemas import ProcessingStage, EnhancedPDFMetadata, PolicyHierarchy, SubPolicy
+from app.models.schemas import ProcessingStage, PDFMetadata, PolicyHierarchy, SubPolicy
 from app.utils.logger import get_logger
 from app.utils.llm import get_llm
 
@@ -56,9 +56,9 @@ def _ensure_policy_hierarchy(policy_hierarchy: Union[PolicyHierarchy, Dict]) -> 
 
 async def parse_pdf_node(state: ProcessingState) -> ProcessingState:
     """
-    Parse PDF document and extract pages with enhanced metadata.
+    Parse PDF document and extract pages with comprehensive metadata.
     
-    Uses EnhancedPDFProcessor for:
+    Uses PDFProcessor for:
     - Multi-strategy text extraction
     - Intelligent OCR with parallel processing
     - Image and table extraction
@@ -74,12 +74,12 @@ async def parse_pdf_node(state: ProcessingState) -> ProcessingState:
 
     state["current_stage"] = ProcessingStage.PARSING_PDF
     state["progress_percentage"] = 5.0
-    state["status_message"] = "Parsing PDF document with enhanced extraction"
-    state["logs"].append(f"Starting enhanced PDF parsing for job {job_id}")
+    state["status_message"] = "Parsing PDF document with comprehensive extraction"
+    state["logs"].append(f"Starting PDF parsing for job {job_id}")
 
     try:
-        # Initialize enhanced PDF processor
-        pdf_processor = EnhancedPDFProcessor(
+        # Initialize PDF processor
+        pdf_processor = PDFProcessor(
             ocr_dpi=300,
             ocr_language='eng',
             ocr_psm_mode=3,
@@ -118,9 +118,9 @@ async def parse_pdf_node(state: ProcessingState) -> ProcessingState:
 
 async def analyze_document_node(state: ProcessingState) -> ProcessingState:
     """
-    Analyze document structure with enhanced page-level intelligence.
+    Analyze document structure with comprehensive page-level intelligence.
     
-    Uses EnhancedDocumentAnalyzer for:
+    Uses DocumentAnalyzer for:
     - Per-page content classification (policy, admin, definitions, etc.)
     - Policy boundary detection (where policies start/end)
     - Content zone mapping (main policy pages, reference pages, etc.)
@@ -130,52 +130,52 @@ async def analyze_document_node(state: ProcessingState) -> ProcessingState:
     
     Provides rich metadata for intelligent chunking and filtering.
 
-    Updates state: metadata, enhanced_document_metadata, should_use_gpt4_extraction
+    Updates state: metadata, document_metadata, should_use_gpt4_extraction
     """
     job_id = state["job_id"]
-    logger.info(f"[{job_id}] Starting Stage 2: Enhanced Document Analysis")
+    logger.info(f"[{job_id}] Starting Stage 2: Document Analysis")
 
     state["current_stage"] = ProcessingStage.ANALYZING_DOCUMENT
     state["progress_percentage"] = 15.0
     state["status_message"] = "Analyzing document with page-level intelligence"
-    state["logs"].append("Starting enhanced document analysis with content classification")
+    state["logs"].append("Starting document analysis with content classification")
 
     try:
-        # Initialize enhanced document analyzer
-        document_analyzer = EnhancedDocumentAnalyzer()
+        # Initialize document analyzer
+        document_analyzer = DocumentAnalyzer()
 
         # Get PDF metadata
         pdf_metadata_dict = state["pdf_metadata"]
-        pdf_metadata = EnhancedPDFMetadata(**pdf_metadata_dict)
+        pdf_metadata = PDFMetadata(**pdf_metadata_dict)
 
         logger.info(
-            f"[{job_id}] Running enhanced analysis: {pdf_metadata.total_pages} pages, "
+            f"[{job_id}] Running analysis: {pdf_metadata.total_pages} pages, "
             f"{len(pdf_metadata.headings)} headings, {len(pdf_metadata.section_boundaries)} sections"
         )
 
         # Initialize LLM for advanced classification
         llm = get_llm(use_gpt4=False)
         
-        # Perform enhanced analysis
-        enhanced_metadata = await document_analyzer.analyze_document(
+        # Perform Analysis
+        doc_metadata = await document_analyzer.analyze_document(
             state["pages"],
             pdf_metadata,
             llm=llm
         )
 
-        # Store enhanced metadata
-        state["enhanced_document_metadata"] = enhanced_metadata.dict()
+        # Store document metadata
+        state["document_metadata"] = doc_metadata.dict()
 
         # Also maintain backward compatibility with old metadata format
         state["metadata"] = {
-            "document_type": enhanced_metadata.document_type,
-            "total_pages": enhanced_metadata.total_pages,
-            "complexity_score": enhanced_metadata.complexity_score,
-            "has_images": enhanced_metadata.has_images,
-            "has_tables": enhanced_metadata.has_tables,
-            "structure_type": enhanced_metadata.structure_type,
-            "language": enhanced_metadata.language,
-            "processing_time_seconds": enhanced_metadata.processing_time_seconds
+            "document_type": doc_metadata.document_type,
+            "total_pages": doc_metadata.total_pages,
+            "complexity_score": doc_metadata.complexity_score,
+            "has_images": doc_metadata.has_images,
+            "has_tables": doc_metadata.has_tables,
+            "structure_type": doc_metadata.structure_type,
+            "language": doc_metadata.language,
+            "processing_time_seconds": doc_metadata.processing_time_seconds
         }
 
         # Build structure info for backward compatibility
@@ -192,24 +192,24 @@ async def analyze_document_node(state: ProcessingState) -> ProcessingState:
         }
 
         logger.info(
-            f"[{job_id}] Enhanced analysis complete:\n"
-            f"  - Document type: {enhanced_metadata.document_type.value}\n"
-            f"  - Complexity: {enhanced_metadata.complexity_score:.2f}\n"
-            f"  - Structure: {enhanced_metadata.structure_type}\n"
-            f"  - Policy pages: {enhanced_metadata.policy_pages_count}/{enhanced_metadata.total_pages}\n"
-            f"  - Admin pages: {enhanced_metadata.admin_pages_count}\n"
-            f"  - Content zones: {len(enhanced_metadata.content_zones)}\n"
-            f"  - Policies detected: {enhanced_metadata.estimated_policy_count}\n"
-            f"  - Pages to filter: {len(enhanced_metadata.pages_to_filter)}\n"
-            f"  - Extractability: {enhanced_metadata.overall_extractability_score:.2f}"
+            f"[{job_id}] Analysis complete:\n"
+            f"  - Document type: {doc_metadata.document_type.value}\n"
+            f"  - Complexity: {doc_metadata.complexity_score:.2f}\n"
+            f"  - Structure: {doc_metadata.structure_type}\n"
+            f"  - Policy pages: {doc_metadata.policy_pages_count}/{doc_metadata.total_pages}\n"
+            f"  - Admin pages: {doc_metadata.admin_pages_count}\n"
+            f"  - Content zones: {len(doc_metadata.content_zones)}\n"
+            f"  - Policies detected: {doc_metadata.estimated_policy_count}\n"
+            f"  - Pages to filter: {len(doc_metadata.pages_to_filter)}\n"
+            f"  - Extractability: {doc_metadata.overall_extractability_score:.2f}"
         )
 
-        # Model selection - use complexity score from enhanced metadata
+        # Model selection - use complexity score from document metadata
         # Complexity > 0.7 suggests using GPT-4 for extraction
         complexity_threshold = 0.7
         use_gpt4_extraction = (
             state["use_gpt4"] or 
-            enhanced_metadata.complexity_score > complexity_threshold
+            doc_metadata.complexity_score > complexity_threshold
         )
         state["should_use_gpt4_extraction"] = use_gpt4_extraction
 
@@ -218,15 +218,15 @@ async def analyze_document_node(state: ProcessingState) -> ProcessingState:
             f"Trees: GPT-4"
         )
         state["logs"].append(
-            f"Enhanced analysis: type={enhanced_metadata.document_type.value}, "
-            f"policies={enhanced_metadata.estimated_policy_count}, "
-            f"zones={len(enhanced_metadata.content_zones)}, "
-            f"complexity={enhanced_metadata.complexity_score:.2f}, "
+            f"Analysis: type={doc_metadata.document_type.value}, "
+            f"policies={doc_metadata.estimated_policy_count}, "
+            f"zones={len(doc_metadata.content_zones)}, "
+            f"complexity={doc_metadata.complexity_score:.2f}, "
             f"model={'GPT-4' if use_gpt4_extraction else 'GPT-4o-mini'}"
         )
 
     except Exception as e:
-        logger.error(f"[{job_id}] Enhanced document analysis failed: {e}", exc_info=True)
+        logger.error(f"[{job_id}] Document analysis failed: {e}", exc_info=True)
         state["errors"].append(f"Document analysis error: {str(e)}")
         state["is_failed"] = True
         state["current_stage"] = ProcessingStage.FAILED
@@ -237,7 +237,7 @@ async def analyze_document_node(state: ProcessingState) -> ProcessingState:
 
 async def chunk_document_node(state: ProcessingState) -> ProcessingState:
     """
-    Create intelligent chunks with enhanced policy boundary detection.
+    Create intelligent chunks with policy boundary detection.
     
     Uses rich metadata from PDF processor and document analyzer to:
     - Filter out non-policy pages (TOC, bibliography, references, admin)
@@ -249,40 +249,40 @@ async def chunk_document_node(state: ProcessingState) -> ProcessingState:
     Updates state: chunks, chunk_summary, chunking_metadata
     """
     job_id = state["job_id"]
-    logger.info(f"[{job_id}] Starting Stage 3: Enhanced Intelligent Chunking")
+    logger.info(f"[{job_id}] Starting Stage 3: Intelligent Chunking")
 
     state["current_stage"] = ProcessingStage.CHUNKING
     state["progress_percentage"] = 25.0
     state["status_message"] = "Creating intelligent policy-aware chunks"
-    state["logs"].append("Starting enhanced intelligent chunking")
+    state["logs"].append("Starting intelligent chunking")
 
     try:
-        # Check if we have enhanced metadata
-        enhanced_metadata = state.get("enhanced_document_metadata")
+        # Check if we have document metadata
+        doc_metadata = state.get("document_metadata")
         pdf_metadata = state.get("pdf_metadata")
         
-        if enhanced_metadata and pdf_metadata:
+        if doc_metadata and pdf_metadata:
             logger.info(
-                f"[{job_id}] Using EnhancedChunkingStrategy with rich metadata "
+                f"[{job_id}] Using semantic ChunkingStrategy with rich metadata "
                 f"from PDF processor and document analyzer"
             )
             
-            # Initialize enhanced chunking strategy
+            # Initialize chunking strategy
             llm = get_llm(use_gpt4=False)
-            chunking_strategy = EnhancedChunkingStrategy(llm=llm)
+            chunking_strategy = ChunkingStrategy(llm=llm)
             
-            # Convert EnhancedPDFPage objects to dicts for chunking
+            # Convert PDF page objects to dicts for chunking
             pages_as_dicts = [
                 page.dict() if hasattr(page, 'dict') else page
                 for page in state["pages"]
             ]
             
-            # Perform enhanced chunking
+            # Perform semantic chunking
             logger.info(f"[{job_id}] Performing policy-aware chunking with page filtering...")
             chunking_result = await chunking_strategy.chunk_document(
                 pages=pages_as_dicts,
                 pdf_metadata=pdf_metadata,
-                enhanced_doc_metadata=enhanced_metadata,
+                doc_metadata=doc_metadata,
             )
             
             # Convert PolicyChunk objects to dicts for state storage
@@ -327,11 +327,11 @@ async def chunk_document_node(state: ProcessingState) -> ProcessingState:
                     for dup in chunking_result.duplicate_candidates
                 ],
                 "context_validation": chunking_result.context_validation,
-                "chunking_method": "enhanced_policy_aware",
+                "chunking_method": "policy_aware",
             }
             
             logger.info(
-                f"[{job_id}] Enhanced chunking complete:\n"
+                f"[{job_id}] Chunking complete:\n"
                 f"  - Total chunks: {chunk_summary['total_chunks']}\n"
                 f"  - Filtered pages: {chunk_summary['filtered_pages_count']}\n"
                 f"  - Policy pages: {chunk_summary['policy_pages_count']}\n"
@@ -342,15 +342,15 @@ async def chunk_document_node(state: ProcessingState) -> ProcessingState:
             )
             
             state["logs"].append(
-                f"Enhanced chunking: {chunk_summary['total_chunks']} chunks, "
+                f"Chunking: {chunk_summary['total_chunks']} chunks, "
                 f"{chunk_summary['filtered_pages_count']} pages filtered, "
                 f"{chunk_summary['unique_policies_count']} unique policies"
             )
             
         else:
-            # Enhanced metadata is required - this shouldn't happen with the current pipeline
+            # Document metadata is required - this shouldn't happen with the current pipeline
             error_msg = (
-                "Enhanced metadata not available. Ensure PDF processor and "
+                "Document metadata not available. Ensure PDF processor and "
                 "document analyzer stages complete successfully."
             )
             logger.error(f"[{job_id}] {error_msg}")
@@ -391,12 +391,12 @@ async def extract_policies_node(state: ProcessingState) -> ProcessingState:
 
         logger.info(f"[{job_id}] Starting policy extraction from {len(state['chunks'])} chunks")
         
-        # Pass enhanced metadata if available
-        enhanced_metadata = state.get("enhanced_document_metadata")
+        # Pass document metadata if available
+        doc_metadata = state.get("document_metadata")
         policy_hierarchy = await policy_extractor.extract_policies(
             state["chunks"],
             state["pages"],
-            enhanced_metadata=enhanced_metadata
+            doc_metadata=doc_metadata
         )
 
         state["policy_hierarchy"] = policy_hierarchy
@@ -577,7 +577,7 @@ async def retry_failed_trees_node(state: ProcessingState) -> ProcessingState:
         all_policies = _get_all_policies(state["policy_hierarchy"].root_policies)
         failed_policies = [p for p in all_policies if p.policy_id in failed_policy_ids]
 
-        logger.info(f"[{job_id}] Retrying {len(failed_policies)} failed policies with enhanced prompts")
+        logger.info(f"[{job_id}] Retrying failed policies with improved prompts")
 
         # Initialize LLM for retry (use GPT-4 for better quality)
         retry_llm = get_llm(use_gpt4=True)

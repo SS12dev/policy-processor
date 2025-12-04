@@ -1,5 +1,5 @@
 """
-Enhanced document intelligence analyzer with page-level content classification,
+Document intelligence analyzer with page-level content classification,
 policy boundary detection, and content zone mapping.
 """
 import re
@@ -8,15 +8,15 @@ from langchain_openai import ChatOpenAI
 from config.settings import settings
 from app.utils.logger import get_logger
 from app.models.schemas import (
-    EnhancedPDFPage,
-    EnhancedPDFMetadata,
+    PDFPage,
+    PDFMetadata,
     PageContentType,
     PageAnalysis,
     PolicyBoundary,
     ContentZone,
     PolicyFlowNode,
     ReferenceInfo,
-    EnhancedDocumentMetadata,
+    DocumentMetadata,
     DocumentType,
     HeadingInfo
 )
@@ -25,9 +25,9 @@ from datetime import datetime
 logger = get_logger(__name__)
 
 
-class EnhancedDocumentAnalyzer:
+class DocumentAnalyzer:
     """
-    Enhanced document analyzer providing:
+    Document analyzer providing:
     - Page-level content classification
     - Policy boundary detection
     - Content zone mapping
@@ -90,7 +90,7 @@ class EnhancedDocumentAnalyzer:
 
     def __init__(self, llm: Optional[ChatOpenAI] = None):
         """
-        Initialize enhanced document analyzer.
+        Initialize document analyzer.
         
         Args:
             llm: Optional pre-configured LLM client for classification
@@ -99,22 +99,22 @@ class EnhancedDocumentAnalyzer:
 
     async def analyze_document(
         self,
-        pages: List[EnhancedPDFPage],
-        pdf_metadata: EnhancedPDFMetadata,
+        pages: List[PDFPage],
+        pdf_metadata: PDFMetadata,
         llm: Optional[ChatOpenAI] = None
-    ) -> EnhancedDocumentMetadata:
+    ) -> DocumentMetadata:
         """
         Perform comprehensive document analysis.
 
         Args:
-            pages: List of EnhancedPDFPage objects
-            pdf_metadata: Enhanced PDF metadata with structure info
+            pages: List of PDFPage objects
+            pdf_metadata: PDF metadata with structure info
             llm: Optional LLM for advanced classification
 
         Returns:
-            EnhancedDocumentMetadata with complete analysis
+            DocumentMetadata with complete analysis
         """
-        logger.info("Starting enhanced document analysis...")
+        logger.info("Starting document analysis...")
         start_time = datetime.utcnow()
 
         if llm is not None:
@@ -135,7 +135,7 @@ class EnhancedDocumentAnalyzer:
         # Update page analyses with policy boundaries
         self._assign_boundaries_to_pages(page_analyses, policy_boundaries)
 
-        # Step 2.5: Enhanced policy document structure analysis
+        # Step 2.5: Policy document structure analysis
         logger.info("Analyzing policy document structure...")
         document_structure = self.analyze_policy_document_structure(pages, pdf_metadata)
 
@@ -173,8 +173,8 @@ class EnhancedDocumentAnalyzer:
 
         processing_time = (datetime.utcnow() - start_time).total_seconds()
 
-        # Build enhanced metadata
-        metadata = EnhancedDocumentMetadata(
+        # Build metadata
+        metadata = DocumentMetadata(
             # Basic info
             document_type=doc_type,
             total_pages=len(pages),
@@ -185,12 +185,12 @@ class EnhancedDocumentAnalyzer:
             language="en",
             processing_time_seconds=processing_time,
             
-            # Enhanced analysis
+            # Analysis
             page_analyses=page_analyses,
             content_zones=content_zones,
             policy_flow_map=policy_flow_map,
             policy_boundaries=policy_boundaries,
-            document_structure=document_structure,  # NEW: Enhanced structure analysis
+            document_structure=document_structure,  # NEW: Structure analysis
             
             # Statistics
             policy_pages_count=stats['policy_pages'],
@@ -220,7 +220,7 @@ class EnhancedDocumentAnalyzer:
         )
 
         logger.info(
-            f"Enhanced analysis complete: type={doc_type}, policies={len(policy_flow_map)}, "
+            f"Analysis complete: type={doc_type}, policies={len(policy_flow_map)}, "
             f"zones={len(content_zones)}, complexity={complexity:.2f}"
         )
 
@@ -228,14 +228,14 @@ class EnhancedDocumentAnalyzer:
 
     async def _classify_page_content(
         self,
-        page: EnhancedPDFPage,
-        pdf_metadata: EnhancedPDFMetadata
+        page: PDFPage,
+        pdf_metadata: PDFMetadata
     ) -> PageAnalysis:
         """
         Classify the content type of a single page.
 
         Args:
-            page: EnhancedPDFPage to classify
+            page: PDFPage to classify
             pdf_metadata: Document metadata for context
 
         Returns:
@@ -339,7 +339,7 @@ class EnhancedDocumentAnalyzer:
 
     def _detect_policy_boundaries(
         self,
-        pages: List[EnhancedPDFPage],
+        pages: List[PDFPage],
         headings: List[HeadingInfo],
         page_analyses: List[PageAnalysis]
     ) -> List[PolicyBoundary]:
@@ -462,7 +462,7 @@ class EnhancedDocumentAnalyzer:
 
     def _detect_continuity_markers(
         self,
-        pages: List[EnhancedPDFPage],
+        pages: List[PDFPage],
         page_analyses: List[PageAnalysis]
     ):
         """
@@ -494,7 +494,7 @@ class EnhancedDocumentAnalyzer:
 
     def _build_policy_flow_map(
         self,
-        pages: List[EnhancedPDFPage],
+        pages: List[PDFPage],
         policy_boundaries: List[PolicyBoundary],
         content_zones: List[ContentZone],
         headings: List[HeadingInfo]
@@ -564,7 +564,7 @@ class EnhancedDocumentAnalyzer:
         
         return flow_nodes
 
-    def _detect_references(self, pages: List[EnhancedPDFPage]) -> List[ReferenceInfo]:
+    def _detect_references(self, pages: List[PDFPage]) -> List[ReferenceInfo]:
         """
         Detect internal and external references.
 
@@ -732,12 +732,12 @@ class EnhancedDocumentAnalyzer:
         policy_keywords = {'policy', 'coverage', 'benefit', 'procedure', 'treatment', 'service'}
         return any(kw in heading_lower for kw in policy_keywords)
 
-    def _calculate_policy_ratio(self, page: EnhancedPDFPage) -> float:
+    def _calculate_policy_ratio(self, page: PDFPage) -> float:
         """Calculate policy content ratio."""
         # Use importance score as proxy
         return page.importance_score
 
-    def _calculate_admin_ratio(self, page: EnhancedPDFPage) -> float:
+    def _calculate_admin_ratio(self, page: PDFPage) -> float:
         """Calculate administrative content ratio."""
         # Inverse of policy ratio
         return 1.0 - page.importance_score
@@ -779,7 +779,7 @@ class EnhancedDocumentAnalyzer:
 
     async def _determine_document_type(
         self,
-        sample_pages: List[EnhancedPDFPage],
+        sample_pages: List[PDFPage],
         sample_analyses: List[PageAnalysis]
     ) -> DocumentType:
         """
@@ -819,7 +819,7 @@ class EnhancedDocumentAnalyzer:
 
     def _calculate_complexity(
         self,
-        pages: List[EnhancedPDFPage],
+        pages: List[PDFPage],
         page_analyses: List[PageAnalysis],
         content_zones: List[ContentZone]
     ) -> float:
@@ -867,7 +867,7 @@ class EnhancedDocumentAnalyzer:
 
     def _determine_structure_type(
         self,
-        pdf_metadata: EnhancedPDFMetadata,
+        pdf_metadata: PDFMetadata,
         content_zones: List[ContentZone]
     ) -> str:
         """
@@ -896,8 +896,8 @@ class EnhancedDocumentAnalyzer:
 
     def analyze_policy_document_structure(
         self,
-        pages: List[EnhancedPDFPage],
-        pdf_metadata: EnhancedPDFMetadata
+        pages: List[PDFPage],
+        pdf_metadata: PDFMetadata
     ) -> Dict[str, Any]:
         """
         Analyze insurance policy document structure to identify true policy boundaries.
@@ -909,8 +909,8 @@ class EnhancedDocumentAnalyzer:
         - Numbering schemes and heading patterns
         
         Args:
-            pages: List of EnhancedPDFPage objects
-            pdf_metadata: Enhanced PDF metadata with headings
+            pages: List of PDFPage objects
+            pdf_metadata: PDF metadata with headings
         
         Returns:
             Dictionary containing:
@@ -965,13 +965,13 @@ class EnhancedDocumentAnalyzer:
     
     def _detect_heading_hierarchy(
         self,
-        pages: List[EnhancedPDFPage],
-        pdf_metadata: EnhancedPDFMetadata
+        pages: List[PDFPage],
+        pdf_metadata: PDFMetadata
     ) -> List[Dict[str, Any]]:
         """
         Detect heading hierarchy from document structure using multiple signals.
         
-        Enhanced in Phase 3.5 to use:
+        Uses:
         - Numbering patterns (Roman, letters, decimals)
         - Semantic keywords (major policy vs subsection vs administrative)
         - Font metadata (size, formatting)
@@ -1148,7 +1148,7 @@ class EnhancedDocumentAnalyzer:
     def _identify_major_sections(
         self,
         heading_hierarchy: List[Dict[str, Any]],
-        pages: List[EnhancedPDFPage]
+        pages: List[PDFPage]
     ) -> List[Dict[str, Any]]:
         """
         Identify major policy sections (level 1 headings).
@@ -1219,7 +1219,7 @@ class EnhancedDocumentAnalyzer:
         self,
         parent_section: Dict[str, Any],
         heading_hierarchy: List[Dict[str, Any]],
-        pages: List[EnhancedPDFPage]
+        pages: List[PDFPage]
     ) -> List[Dict[str, Any]]:
         """
         Identify subsections within a major section.
@@ -1323,7 +1323,7 @@ class EnhancedDocumentAnalyzer:
     
     def _identify_administrative_pages(
         self,
-        pages: List[EnhancedPDFPage],
+        pages: List[PDFPage],
         major_sections: List[Dict[str, Any]]
     ) -> List[int]:
         """
@@ -1374,7 +1374,7 @@ class EnhancedDocumentAnalyzer:
     
     def _determine_policy_type(
         self,
-        pages: List[EnhancedPDFPage],
+        pages: List[PDFPage],
         major_sections: List[Dict[str, Any]]
     ) -> str:
         """
@@ -1406,7 +1406,7 @@ class EnhancedDocumentAnalyzer:
     def _calculate_document_complexity(
         self,
         major_sections: List[Dict[str, Any]],
-        pages: List[EnhancedPDFPage]
+        pages: List[PDFPage]
     ) -> str:
         """
         Calculate document complexity rating.

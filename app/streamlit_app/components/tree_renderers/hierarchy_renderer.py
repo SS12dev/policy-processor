@@ -23,7 +23,7 @@ def display_policy_hierarchy_enhanced(hierarchy: dict):
             - max_depth: Maximum depth of the hierarchy
             - root_policies: List of root policy dictionaries
     """
-    st.markdown("### 🏛️ Policy Hierarchy Structure")
+    st.markdown("### [HIERARCHY] Policy Hierarchy Structure")
     
     # Overview metrics - calculate from actual data to avoid backend bugs
     col1, col2, col3, col4 = st.columns(4)
@@ -44,7 +44,7 @@ def display_policy_hierarchy_enhanced(hierarchy: dict):
     st.markdown("---")
     
     # Display explanation
-    with st.expander("ℹ️ **Understanding the Hierarchy**", expanded=False):
+    with st.expander("[INFO] **Understanding the Hierarchy**", expanded=False):
         st.markdown("""
         **Policy Hierarchy** organizes policies into parent-child relationships:
         
@@ -68,7 +68,7 @@ def display_policy_hierarchy_enhanced(hierarchy: dict):
         for idx, policy in enumerate(hierarchy["root_policies"], 1):
             render_policy_card(policy, idx)
     else:
-        st.warning("⚠️ No root policies found in hierarchy")
+        st.warning("[WARNING] No root policies found in hierarchy")
 
 
 def render_policy_card(policy: dict, idx: int):
@@ -90,7 +90,7 @@ def render_policy_card(policy: dict, idx: int):
         # Header with icon and level badge
         col_header, col_badge = st.columns([5, 1])
         with col_header:
-            st.markdown(f"### 📋 Root Policy {idx}: {policy.get('title', 'Untitled Policy')}")
+            st.markdown(f"### [ROOT] Root Policy {idx}: {policy.get('title', 'Untitled Policy')}")
         with col_badge:
             st.markdown(
                 f"<div style='text-align: right; padding: 8px; background-color: #1f77b4; "
@@ -104,7 +104,7 @@ def render_policy_card(policy: dict, idx: int):
         
         # Conditions
         if policy.get("conditions"):
-            with st.expander(f"📝 View Conditions ({len(policy['conditions'])} total)", expanded=False):
+            with st.expander(f"[CONDITIONS] View Conditions ({len(policy['conditions'])} total)", expanded=False):
                 for cond_idx, cond in enumerate(policy["conditions"], 1):
                     st.markdown(f"{cond_idx}. {cond.get('description', 'No description')}")
         
@@ -135,7 +135,7 @@ def render_child_policy(child: dict, child_idx: int):
         st.markdown(f"""
         <div style='margin-left: 40px; padding: 15px; background-color: #f0f2f6; 
                     border-left: 4px solid #4CAF50; border-radius: 5px; margin-bottom: 10px;'>
-            <strong>└─ Sub-Policy {child_idx}: {child.get('title', 'Untitled')}</strong><br/>
+            <strong>|-- Sub-Policy {child_idx}: {child.get('title', 'Untitled')}</strong><br/>
             <span style='color: #666;'>{child.get('description', 'No description')}</span><br/>
             <span style='color: #888; font-size: 0.9em;'>Level {child.get('level', 1)} | Policy ID: {child.get('policy_id', 'N/A')}</span>
         </div>
@@ -143,13 +143,13 @@ def render_child_policy(child: dict, child_idx: int):
         
         # Show child conditions
         if child.get("conditions"):
-            with st.expander(f"    📝 Sub-Policy Conditions ({len(child['conditions'])} total)", expanded=False):
+            with st.expander(f"    [CONDITIONS] Sub-Policy Conditions ({len(child['conditions'])} total)", expanded=False):
                 for cond_idx, cond in enumerate(child["conditions"], 1):
                     st.markdown(f"    {cond_idx}. {cond.get('description', 'No description')}")
         
         # Recursively show grandchildren if they exist
         if child.get("children"):
-            st.markdown(f"    **└─ Nested Sub-Policies:** {len(child['children'])} grandchildren")
+            st.markdown(f"    **|-- Nested Sub-Policies:** {len(child['children'])} grandchildren")
             for grandchild in child["children"]:
                 render_grandchild_policy(grandchild)
 
@@ -164,7 +164,7 @@ def render_grandchild_policy(grandchild: dict):
     st.markdown(f"""
     <div style='margin-left: 80px; padding: 10px; background-color: #e8f5e9; 
                 border-left: 3px solid #66BB6A; border-radius: 5px; margin-bottom: 8px; font-size: 0.9em;'>
-        <strong>└─ {grandchild.get('title', 'Untitled')}</strong><br/>
+        <strong>|-- {grandchild.get('title', 'Untitled')}</strong><br/>
         <span style='color: #666;'>{grandchild.get('description', 'No description')}</span><br/>
         <span style='color: #888; font-size: 0.85em;'>Level {grandchild.get('level', 2)}</span>
     </div>

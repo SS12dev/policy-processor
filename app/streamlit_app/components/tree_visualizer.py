@@ -113,7 +113,7 @@ class TileTreeVisualizer:
         if node.children and node.node_type != "outcome":
             col1, col2 = st.columns([1, 11])
             with col1:
-                expand_label = "−" if is_expanded else "+"
+                expand_label = "[-]" if is_expanded else "[+]"
                 if st.button(expand_label, key=f"toggle_{node.node_id}"):
                     if is_expanded:
                         st.session_state.expanded_nodes.remove(node.node_id)
@@ -151,26 +151,26 @@ class TileTreeVisualizer:
 
         # Node content
         if node.node_type == "question":
-            icon = "❓"
+            icon = "[?]"
             title = node.question.question_text if node.question else "No question"
             subtitle = f"Type: {node.question.question_type.value}" if node.question else ""
         elif node.node_type == "decision":
-            icon = "⚙️"
+            icon = "[D]"
             title = node.decision_logic or "Logic check"
             subtitle = f"Decision node"
         elif node.node_type == "outcome":
-            icon = {"approved": "✅", "denied": "❌", "refer_to_manual": "📋"}.get(
-                node.outcome_type, "📄"
+            icon = {"approved": "[APPROVED]", "denied": "[DENIED]", "refer_to_manual": "[MANUAL]"}.get(
+                node.outcome_type, "[OUTCOME]"
             )
             title = node.outcome or "Outcome"
             subtitle = f"Outcome: {node.outcome_type}"
         else:
-            icon = "📌"
+            icon = "[NODE]"
             title = f"Node {node.node_id}"
             subtitle = node.node_type
 
         # Answer label if from parent
-        answer_label = f"<div style='color: {color}; font-weight: bold; margin-bottom: 5px;'>[{parent_answer.upper()}] →</div>" if parent_answer else ""
+        answer_label = f"<div style='color: {color}; font-weight: bold; margin-bottom: 5px;'>[{parent_answer.upper()}] --></div>" if parent_answer else ""
 
         html = f"""<div style="{line_style} margin-bottom: 10px;">
 {answer_label}

@@ -89,7 +89,7 @@ def render_processing_metrics(
                 st.progress(completeness, text=f"Context: {completeness:.0%}")
         
         # Detailed statistics
-        with st.expander("📊 Detailed Statistics"):
+        with st.expander("[STATS] Detailed Statistics"):
             st.markdown("### Document Analysis")
             
             total_pages = metadata.get("total_pages", 0) if isinstance(metadata, dict) else getattr(metadata, "total_pages", 0)
@@ -150,7 +150,7 @@ def render_validation_issues(validation_result: Dict[str, Any]) -> None:
     issues = validation_result.get("issues", []) if isinstance(validation_result, dict) else getattr(validation_result, "issues", [])
     
     if not issues:
-        st.success("✅ No validation issues found!")
+        st.success("[OK] No validation issues found!")
         return
     
     # Group by severity
@@ -162,13 +162,13 @@ def render_validation_issues(validation_result: Dict[str, Any]) -> None:
     col1, col2, col3 = st.columns(3)
     with col1:
         if errors:
-            st.error(f"🚫 {len(errors)} Errors")
+            st.error(f"[ERROR] {len(errors)} Errors")
     with col2:
         if warnings:
-            st.warning(f"⚠️ {len(warnings)} Warnings")
+            st.warning(f"[WARNING] {len(warnings)} Warnings")
     with col3:
         if info:
-            st.info(f"ℹ️ {len(info)} Info")
+            st.info(f"[INFO] {len(info)} Info")
     
     # Detailed issues
     with st.expander(f"View All Issues ({len(issues)} total)"):
@@ -179,14 +179,14 @@ def render_validation_issues(validation_result: Dict[str, Any]) -> None:
             location = issue.get("location") if isinstance(issue, dict) else getattr(issue, "location", "")
             suggestion = issue.get("suggestion") if isinstance(issue, dict) else getattr(issue, "suggestion", "")
             
-            severity_icon = {"error": "🚫", "warning": "⚠️", "info": "ℹ️"}.get(severity, "")
+            severity_icon = {"error": "[ERROR]", "warning": "[WARNING]", "info": "[INFO]"}.get(severity, "")
             
             st.markdown(f"**{severity_icon} {severity.upper()}: {issue_type}**")
             st.write(description)
             st.caption(f"Location: {location}")
             
             if suggestion:
-                st.info(f"💡 Suggestion: {suggestion}")
+                st.info(f"[TIP] Suggestion: {suggestion}")
             
             st.divider()
 
@@ -206,7 +206,7 @@ def render_cost_estimate(result: Dict[str, Any]) -> None:
     tree_cost = len(decision_trees) * 0.005  # GPT-4 for trees
     total_cost = extraction_cost + tree_cost
     
-    with st.expander("💰 Estimated API Cost"):
+    with st.expander("[COST] Estimated API Cost"):
         st.write(f"- Policy Extraction: ${extraction_cost:.4f}")
         st.write(f"- Tree Generation: ${tree_cost:.4f}")
         st.write(f"**Total Estimated Cost**: ${total_cost:.4f}")

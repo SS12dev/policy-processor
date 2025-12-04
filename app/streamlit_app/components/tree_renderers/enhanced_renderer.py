@@ -30,7 +30,7 @@ def display_decision_tree_enhanced(tree: dict, tree_idx: int):
     policy_id = tree.get('policy_id', 'N/A')
     
     # Debug: Show tree structure
-    with st.expander("🔍 Debug: Tree Data Structure", expanded=False):
+    with st.expander("[DEBUG] Debug: Tree Data Structure", expanded=False):
         st.write("**Tree Keys:**", list(tree.keys()))
         st.write("**Policy Title:**", policy_title)
         st.write("**Policy ID:**", policy_id)
@@ -86,7 +86,7 @@ def render_tree_with_depth(root_node: dict, questions: list, tree_idx: int):
     if questions:
         st.markdown("""
         <div style='background: #F8F9FA; padding: 15px; border-radius: 8px; margin-bottom: 20px;'>
-            <h4 style='margin: 0 0 10px 0; color: #1F2937;'>📊 Decision Flow Path</h4>
+            <h4 style='margin: 0 0 10px 0; color: #1F2937;'>[FLOW] Decision Flow Path</h4>
             <p style='margin: 0; color: #6B7280; font-size: 0.9em;'>
                 Follow the questions below to determine the outcome. Each question leads to specific paths based on your answers.
             </p>
@@ -201,7 +201,7 @@ def render_answer_connector(answer: str, depth: int, branch_num: int):
                 <span style='color: #EA580C; font-size: 0.8em; font-weight: 600;'>IF:</span>
                 <code style='background: rgba(249,115,22,0.15); padding: 2px 8px; 
                              border-radius: 4px; color: #C2410C; margin-left: 6px; font-weight: 600;'>{answer}</code>
-                <span style='color: #F97316; margin-left: 6px;'>↓ THEN</span>
+                <span style='color: #F97316; margin-left: 6px;'>--> THEN</span>
             </div>
         </div>
     </div>
@@ -248,14 +248,14 @@ def render_question_tile(question: dict, step_num: int, depth: int, tree_idx: in
                 </span>
             </div>
             <h4 style='margin: 0 0 12px 0; color: #FFFFFF; font-weight: 500; font-size: 1.1em;'>
-                ❓ {question_text}
+                [?] {question_text}
             </h4>
             <div style='color: #93C5FD; font-size: 0.9em; margin-bottom: 8px;'>
                 <strong>Answer Type:</strong> 
                 <code style='background: rgba(255,255,255,0.1); padding: 3px 10px; 
                              border-radius: 4px; color: #DBEAFE; margin-left: 8px;'>{answer_type}</code>
             </div>
-            {f"<div style='color: #D1FAE5; font-size: 0.85em; margin-top: 8px; font-style: italic;'>💡 {explanation}</div>" if explanation else ""}
+            {f"<div style='color: #D1FAE5; font-size: 0.85em; margin-top: 8px; font-style: italic;'>[INFO] {explanation}</div>" if explanation else ""}
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -297,13 +297,13 @@ def render_branch_with_outcome(branch: dict, question: dict, tree_idx: int, dept
     
     # Color coding based on outcome type
     if 'approv' in outcome_type.lower() or 'approv' in outcome_label.lower():
-        bg_color = '#065F46'; border_color = '#10B981'; icon = '✅'; badge = 'APPROVED'
+        bg_color = '#065F46'; border_color = '#10B981'; icon = '[APPROVED]'; badge = 'APPROVED'
     elif 'den' in outcome_type.lower() or 'den' in outcome_label.lower():
-        bg_color = '#991B1B'; border_color = '#EF4444'; icon = '❌'; badge = 'DENIED'
+        bg_color = '#991B1B'; border_color = '#EF4444'; icon = '[DENIED]'; badge = 'DENIED'
     elif 'review' in outcome_type.lower() or 'refer' in outcome_type.lower() or 'requires' in outcome_type.lower():
-        bg_color = '#92400E'; border_color = '#F59E0B'; icon = '⏸️'; badge = 'REVIEW'
+        bg_color = '#92400E'; border_color = '#F59E0B'; icon = '[REVIEW]'; badge = 'REVIEW'
     else:
-        bg_color = '#6B21A8'; border_color = '#A855F7'; icon = '📋'; badge = 'OUTCOME'
+        bg_color = '#6B21A8'; border_color = '#A855F7'; icon = '[OUTCOME]'; badge = 'OUTCOME'
     
     st.markdown(f"""
     <div style='margin-left: {indent}px; margin-bottom: 15px;'>
@@ -323,7 +323,7 @@ def render_branch_with_outcome(branch: dict, question: dict, tree_idx: int, dept
                         <span style='color: #E5E7EB; font-size: 0.8em; font-weight: 600;'>IF:</span>
                         <code style='background: rgba(0,0,0,0.2); padding: 3px 8px; 
                                      border-radius: 4px; color: #FCD34D; margin-left: 6px;'>{answer}</code>
-                        <span style='color: #E5E7EB; margin-left: 6px; font-size: 0.8em; font-weight: 600;'>→ THEN</span>
+                        <span style='color: #E5E7EB; margin-left: 6px; font-size: 0.8em; font-weight: 600;'>--> THEN</span>
                     </div>
                 </div>
                 <div style='display: flex; align-items: flex-start; gap: 10px; margin-top: 10px;'>
@@ -362,13 +362,13 @@ def render_outcome_tile(outcome_data: dict, tree_idx: int, depth: int, path_num:
     
     # Color coding
     if 'approv' in outcome_type.lower() or 'approv' in outcome_label.lower():
-        bg_color = '#065F46'; border_color = '#10B981'; icon = '✅'; badge = 'APPROVED'
+        bg_color = '#065F46'; border_color = '#10B981'; icon = '[APPROVED]'; badge = 'APPROVED'
     elif 'den' in outcome_type.lower() or 'den' in outcome_label.lower():
-        bg_color = '#991B1B'; border_color = '#EF4444'; icon = '❌'; badge = 'DENIED'
+        bg_color = '#991B1B'; border_color = '#EF4444'; icon = '[DENIED]'; badge = 'DENIED'
     elif 'review' in outcome_type.lower() or 'refer' in outcome_type.lower():
-        bg_color = '#92400E'; border_color = '#F59E0B'; icon = '⏸️'; badge = 'REVIEW'
+        bg_color = '#92400E'; border_color = '#F59E0B'; icon = '[REVIEW]'; badge = 'REVIEW'
     else:
-        bg_color = '#6B21A8'; border_color = '#A855F7'; icon = '📋'; badge = 'OUTCOME'
+        bg_color = '#6B21A8'; border_color = '#A855F7'; icon = '[OUTCOME]'; badge = 'OUTCOME'
     
     st.markdown(f"""
     <div style='margin-left: {indent}px; margin-bottom: 15px;'>

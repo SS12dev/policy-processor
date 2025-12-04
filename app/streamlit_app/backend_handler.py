@@ -162,16 +162,66 @@ class UIBackendHandler:
 
     def get_job_results(self, job_id: str) -> Optional[Dict[str, Any]]:
         """
-        Get job results from database.
+        Get job results from database, including PDF document.
 
         Args:
             job_id: Job identifier
 
         Returns:
-            Results data or None
+            Results data with document content or None
         """
         try:
-            return self.db_ops.get_results(job_id)
+            # Get the processing results
+            results = self.db_ops.get_results(job_id)
+            
+            if not results:
+                logger.warning(f"No results found for job {job_id}")
+                return None
+            
+            # Get the document content
+            document = self.db_ops.get_document(job_id)
+            
+            if document:
+                # Decode base64 PDF content
+                import base64
+                try:
+                    pdf_bytes = base64.b64decode(document.content_base64)
+                    results['document_content'] = pdf_bytes
+                    results['document_filename'] = document.filename or 'document.pdf'
+                    logger.info(f"Retrieved document for job {job_id}: {len(pdf_bytes)} bytes")
+                except Exception as e:
+                    logger.error(f"Error decoding document content: {e}")
+            else:
+                logger.warning(f"No document found for job {job_id}")
+            
+            # Get job metadata for additional info
+            job = self.db_ops.get_job(job_id)
+            if job:
+                # Convert job model to dict
+                job_dict = {
+                    'total_pages': job.total_pages,
+                    'processing_time_seconds': job.processing_time_seconds,
+                    'validation_confidence': job.validation_confidence,
+                    'document_type': job.document_type,
+                }
+                
+                # Merge job metadata into results
+                if 'metadata' not in results:
+                    results['metadata'] = {}
+                
+                results['metadata']['total_pages'] = job_dict.get('total_pages')
+                results['metadata']['processing_time'] = job_dict.get('processing_time_seconds')
+                results['metadata']['validation_confidence'] = job_dict.get('validation_confidence')
+                results['metadata']['document_type'] = job_dict.get('document_type')
+                
+                # Add validation result if not present
+                if 'validation_result' not in results:
+                    results['validation_result'] = {}
+                
+                results['validation_result']['overall_confidence'] = job_dict.get('validation_confidence', 0.0)
+            
+            return results
+            
         except Exception as e:
             logger.error(f"Error getting job results: {e}", exc_info=True)
             return None

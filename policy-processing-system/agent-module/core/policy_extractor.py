@@ -6,7 +6,14 @@ import json
 import re
 from typing import List, Dict, Any, Optional, Union
 from langchain_openai import ChatOpenAI
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+    before_sleep_log,
+)
+from openai import InternalServerError, APITimeoutError
 from settings import settings
 from utils.logger import get_logger
 from core.data_models import DocumentChunk, PDFPage
@@ -100,11 +107,23 @@ class PolicyExtractor:
         all_policies = []
         definitions = {}
         errors_count = 0
+        timeout_errors = 0
+        failed_chunks = []
 
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 errors_count += 1
-                logger.error(f"Error extracting from chunk {i + 1}: {result}")
+                error_type = type(result).__name__
+                
+                # Track specific error types
+                if "Timeout" in error_type or "timeout" in str(result).lower():
+                    timeout_errors += 1
+                
+                # Store chunk info for failed extractions
+                chunk_id = _get_chunk_attr(chunks_to_process[i], "chunk_id", f"chunk_{i}")
+                failed_chunks.append(chunk_id)
+                
+                logger.error(f"Error extracting from chunk {i + 1} ({chunk_id}): [{error_type}] {result}")
                 continue
 
             if result is None:
@@ -117,10 +136,12 @@ class PolicyExtractor:
 
         logger.info(
             f"Extraction complete: {len(all_policies)} policies, "
-            f"{len(definitions)} definitions from {len(chunks_to_process) - errors_count} chunks"
+            f"{len(definitions)} definitions from {len(chunks_to_process) - errors_count}/{len(chunks_to_process)} chunks"
         )
         if errors_count > 0:
-            logger.warning(f"Failed chunks: {errors_count}")
+            logger.warning(f"Failed chunks: {errors_count} ({', '.join(failed_chunks)})")
+        if timeout_errors > 0:
+            logger.warning(f"Timeout failures: {timeout_errors} - Consider increasing openai_per_request_timeout or reducing concurrent requests")
 
         # Build hierarchy
         logger.info("Building policy hierarchy from extracted policies...")
@@ -227,7 +248,14 @@ class PolicyExtractor:
 
     @retry(
         stop=stop_after_attempt(settings.openai_max_retries),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
+        wait=wait_exponential(
+            multiplier=settings.openai_retry_multiplier,
+            min=settings.openai_retry_min_wait,
+            max=settings.openai_retry_max_wait
+        ),
+        retry=retry_if_exception_type((InternalServerError, APITimeoutError, TimeoutError)),
+        before_sleep=before_sleep_log(logger, logger.level),
+        reraise=True,
     )
     async def _extract_from_chunk(
         self, chunk: Union[Dict, Any], pages: List[Union[Dict, Any]]
@@ -266,12 +294,16 @@ class PolicyExtractor:
 
             return policies, definitions
 
+        except (InternalServerError, APITimeoutError) as e:
+            error_type = type(e).__name__
+            logger.error(f"LiteLLM proxy error for chunk {chunk_id} ({error_type}): {e}")
+            raise  # Let tenacity retry handle it
         except json.JSONDecodeError as e:
             logger.error(f"JSON decode error for chunk {chunk_id}: {e}")
             return [], {}
         except Exception as e:
             logger.error(f"Error extracting from chunk {chunk_id}: {e}")
-            return [], {}
+            raise  # Let tenacity retry handle it
 
     def _create_extraction_prompt(self, chunk: Union[Dict, Any]) -> str:
         """

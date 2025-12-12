@@ -7,13 +7,18 @@ Two-tab interface:
 """
 
 import streamlit as st
+import asyncio
 import json
 import base64
+import warnings
 from pathlib import Path
 from datetime import datetime
 
+# Suppress async generator closing warnings from httpx/a2a during cleanup
+warnings.filterwarnings("ignore", message=".*asynchronous generator is already running.*")
+
 # Add parent directory to path to import app modules
-from a2a_client import A2AClientSync
+from a2a_client import get_client
 from backend_handler import UIBackendHandler
 from database.operations import DatabaseOperations
 from utils.logger import get_logger
@@ -41,12 +46,6 @@ def get_database():
     db_path.parent.mkdir(parents=True, exist_ok=True)
     return DatabaseOperations(database_url=f"sqlite:///{db_path}")
 
-# Initialize A2A client
-@st.cache_resource
-def get_a2a_client():
-    """Get A2A client instance."""
-    return A2AClientSync(base_url="http://localhost:8001", timeout=300.0)
-
 # Initialize backend handler
 @st.cache_resource
 def get_backend_handler():
@@ -54,7 +53,6 @@ def get_backend_handler():
     return UIBackendHandler(get_database())
 
 db_ops = get_database()
-a2a_client = get_a2a_client()
 backend_handler = get_backend_handler()
 
 # App header
@@ -65,11 +63,23 @@ st.markdown("---")
 with st.sidebar:
     st.header("Status")
 
-    # Check A2A server health
-    if a2a_client.check_health():
-        st.success("● Server Online")
-    else:
-        st.error("● Server Offline")
+    # Check server health on button click (document-analysis-system pattern)
+    if st.button("🔍 Check Server Health", use_container_width=True):
+        import httpx
+        try:
+            response = httpx.get(
+                "http://localhost:8001/health",
+                timeout=5.0
+            )
+            if response.status_code == 200:
+                data = response.json()
+                st.success(f"✅ Server Online")
+                with st.expander("Server Info"):
+                    st.json(data)
+            else:
+                st.error(f"❌ Server Error: {response.status_code}")
+        except Exception as e:
+            st.error(f"❌ Server Offline: {str(e)}")
 
     # Total policies count
     total_jobs = db_ops.count_jobs(status="completed")
@@ -1400,6 +1410,129 @@ def _display_decision_trees(results_data: dict):
                 key="export_trees_view"
             )
 
+# ============================================================================
+# Async Processing Function
+# ============================================================================
+async def process_policy_document(
+    pdf_bytes: bytes,
+    filename: str,
+    policy_name: str,
+    use_gpt4: bool,
+    enable_streaming: bool,
+    confidence_threshold: float
+):
+    """Process policy document asynchronously."""
+    client = get_client()
+    
+    # Progress indicators
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    try:
+        # Connect to agent
+        status_text.text("Connecting to agent...")
+        await client.connect()
+        progress_bar.progress(10)
+        
+        # Send document
+        status_text.text("Sending document...")
+        progress_bar.progress(20)
+        
+        # Process events
+        task_id = None
+        final_results = None
+        
+        async for event in client.process_document(
+            pdf_bytes,
+            filename,
+            use_gpt4,
+            enable_streaming,
+            confidence_threshold
+        ):
+            event_type = event.get("type")
+            
+            if event_type == "status":
+                status_msg = event.get("message", "Processing...")
+                status_text.text(f"📄 {status_msg}")
+                
+                # Update progress based on status
+                if "parsing" in status_msg.lower():
+                    progress_bar.progress(30)
+                elif "extracting" in status_msg.lower():
+                    progress_bar.progress(50)
+                elif "analyzing" in status_msg.lower():
+                    progress_bar.progress(70)
+                elif "validating" in status_msg.lower():
+                    progress_bar.progress(85)
+                elif "formatting" in status_msg.lower():
+                    progress_bar.progress(95)
+            
+            elif event_type == "artifact":
+                task_id = event.get("task_id")
+                final_results = event.get("data")
+            
+            elif event_type == "complete":
+                task_id = event.get("job_id")
+                final_results = event.get("results")
+                progress_bar.progress(100)
+                status_text.text("✅ Processing complete!")
+                break
+            
+            elif event_type == "error":
+                status_text.error(f"❌ Error: {event.get('message')}")
+                progress_bar.progress(100)
+                return
+        
+        # Save results to database
+        if final_results:
+            result = {
+                "job_id": task_id,
+                "status": "completed",
+                "results": final_results,
+                "message": "Processing completed"
+            }
+            
+            saved_result = backend_handler.process_a2a_response(
+                response=result,
+                pdf_bytes=pdf_bytes,
+                filename=filename,
+                policy_name=policy_name,
+                use_gpt4=use_gpt4,
+                confidence_threshold=confidence_threshold
+            )
+            
+            if saved_result.get("saved_to_database"):
+                st.success(f"✅ Policy '{policy_name}' processed and saved successfully!")
+                
+                job_id = saved_result.get("job_id")
+                if job_id:
+                    st.session_state.last_job_id = job_id
+                    
+                    # Display summary
+                    results_data = saved_result.get("results", {})
+                    
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Policy Name", policy_name)
+                    with col2:
+                        total_policies = results_data.get("policy_hierarchy", {}).get("total_policies", 0)
+                        st.metric("Total Policies", total_policies)
+                    with col3:
+                        total_trees = len(results_data.get("decision_trees", []))
+                        st.metric("Decision Trees", total_trees)
+                    
+                    st.info(f"Job ID: `{job_id}` - Switch to 'Review Decision Trees' tab to view results")
+            else:
+                st.warning("Document processed but failed to save to database")
+        else:
+            st.warning("⚠️ No results received from agent")
+    
+    except Exception as e:
+        status_text.error(f"❌ Error: {str(e)}")
+        st.exception(e)
+        logger.error(f"Processing error: {e}", exc_info=True)
+
+
 # Main content - Tabs
 # Main content - Simplified Tabs (2 tabs instead of 3)
 tab1, tab2 = st.tabs(["Upload Document", "Policies"])
@@ -1466,61 +1599,15 @@ with tab1:
             elif db_ops.policy_name_exists(policy_name.strip()):
                 st.error(f"⚠️ Policy name '{policy_name.strip()}' already exists. Please choose a unique name.")
             else:
-                with st.spinner("Processing document... This may take a few minutes."):
-                    try:
-                        # Process the document
-                        result = a2a_client.process_document(
-                            pdf_bytes=uploaded_file.getvalue(),
-                            filename=uploaded_file.name,
-                            use_gpt4=use_gpt4,
-                            enable_streaming=enable_streaming,
-                            confidence_threshold=confidence_threshold
-                        )
-
-                        # Check for errors
-                        if result.get("status") == "failed":
-                            st.error("Document processing failed!")
-                            st.error(result.get("message", "Unknown error"))
-                        else:
-                            # Save results to database using backend handler
-                            saved_result = backend_handler.process_a2a_response(
-                                response=result,
-                                pdf_bytes=uploaded_file.getvalue(),
-                                filename=uploaded_file.name,
-                                policy_name=policy_name.strip(),
-                                use_gpt4=use_gpt4,
-                                confidence_threshold=confidence_threshold
-                            )
-
-                            if saved_result.get("saved_to_database"):
-                                st.success(f"✅ Policy '{policy_name.strip()}' processed and saved successfully!")
-
-                                job_id = saved_result.get("job_id")
-                                if job_id:
-                                    # Store in session state for tab 2
-                                    st.session_state.last_job_id = job_id
-
-                                    # Display summary
-                                    results_data = saved_result.get("results", {})
-
-                                    col1, col2, col3 = st.columns(3)
-                                    with col1:
-                                        st.metric("Policy Name", policy_name.strip())
-                                    with col2:
-                                        total_policies = results_data.get("policy_hierarchy", {}).get("total_policies", 0)
-                                        st.metric("Total Policies", total_policies)
-                                    with col3:
-                                        total_trees = len(results_data.get("decision_trees", []))
-                                        st.metric("Decision Trees", total_trees)
-
-                                    st.info(f"Job ID: `{job_id}` - Switch to 'Review Decision Trees' tab to view results")
-                            else:
-                                st.warning("Document processed but failed to save to database")
-                                st.json(result)
-
-                    except Exception as e:
-                        st.error(f"Error processing document: {str(e)}")
-                        logger.error(f"Processing error: {e}", exc_info=True)
+                # Run async processing
+                asyncio.run(process_policy_document(
+                    uploaded_file.getvalue(),
+                    uploaded_file.name,
+                    policy_name.strip(),
+                    use_gpt4,
+                    enable_streaming,
+                    confidence_threshold
+                ))
 
     # Recent Jobs Section
     st.markdown("---")

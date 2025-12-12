@@ -5,7 +5,14 @@ import json
 import uuid
 from typing import List, Dict, Any, Optional
 from langchain_openai import ChatOpenAI
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+    before_sleep_log,
+)
+from openai import InternalServerError, APITimeoutError
 from settings import settings
 from utils.logger import get_logger
 from models.schemas import (
@@ -91,18 +98,13 @@ class DecisionTreeGenerator:
             async with semaphore:
                 return await self._generate_hierarchical_tree(policy, index, total)
 
-        # Filter to only leaf policies (aggregator policies don't need decision trees)
-        leaf_policies = [p for p in ordered_policies if len(p.children) == 0]
-        logger.info(
-            f"Filtered {len(leaf_policies)} leaf policies from {len(ordered_policies)} total policies. "
-            f"Skipping {len(ordered_policies) - len(leaf_policies)} aggregator policies (they don't need decision trees)."
-        )
-
-        # Generate trees only for leaf policies
-        logger.info(f"Creating {len(leaf_policies)} tree generation tasks (leaf policies only)...")
+        # Generate trees for ALL policies (both leaf and aggregator policies need decision trees)
+        # Aggregator policies get routing-style trees that guide users to child policies
+        # Leaf policies get detailed condition-checking trees
+        logger.info(f"Creating {len(ordered_policies)} tree generation tasks (including both leaf and aggregator policies)...")
         tasks = []
-        for i, policy in enumerate(leaf_policies):
-            tasks.append(generate_with_semaphore(policy, i + 1, len(leaf_policies)))
+        for i, policy in enumerate(ordered_policies):
+            tasks.append(generate_with_semaphore(policy, i + 1, len(ordered_policies)))
 
         logger.info(f"Executing tree generation tasks in parallel (max {settings.openai_max_concurrent_requests} concurrent)...")
         # Run all tasks with concurrency control
@@ -112,16 +114,33 @@ class DecisionTreeGenerator:
         logger.info("Processing tree generation results...")
         trees = []
         errors_count = 0
+        timeout_errors = 0
+        proxy_errors = 0
+        
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 errors_count += 1
-                logger.error(f"Error generating tree for policy {leaf_policies[i].policy_id}: {result}")
+                error_type = type(result).__name__
+                if "Timeout" in error_type or "timeout" in str(result).lower():
+                    timeout_errors += 1
+                    logger.error(f"Timeout error for policy {ordered_policies[i].policy_id}: {result}")
+                elif "InternalServerError" in error_type or "504" in str(result):
+                    proxy_errors += 1
+                    logger.error(f"LiteLLM proxy error for policy {ordered_policies[i].policy_id}: {result}")
+                else:
+                    logger.error(f"Error generating tree for policy {ordered_policies[i].policy_id}: {result}")
             elif result is not None:
                 trees.append(result)
                 self.generated_trees[result.policy_id] = result
                 logger.debug(f"Successfully stored tree for policy {result.policy_id}")
 
-        logger.info(f"Tree generation complete - Success: {len(trees)}/{len(leaf_policies)}, Failed: {errors_count}")
+        logger.info(f"Tree generation complete - Success: {len(trees)}/{len(ordered_policies)}, Failed: {errors_count}")
+        if timeout_errors > 0:
+            logger.warning(f"Timeout failures: {timeout_errors} (consider increasing openai_per_request_timeout from {settings.openai_per_request_timeout}s)")
+        if proxy_errors > 0:
+            logger.warning(f"LiteLLM proxy failures: {proxy_errors} (infrastructure-level timeout limits)")
+        if errors_count > 0:
+            logger.info(f"Retry configuration was: max_retries={settings.openai_max_retries}, backoff={settings.openai_retry_min_wait}-{settings.openai_retry_max_wait}s")
 
         return trees
 
@@ -142,24 +161,44 @@ class DecisionTreeGenerator:
         import asyncio
 
         try:
-            # Determine if this is a leaf or aggregator policy
-            is_aggregator = len(policy.children) > 0
-            tree_type = "aggregator" if is_aggregator else "leaf"
-
-            logger.info(f"[Tree {index}/{total}] Starting generation for {tree_type} policy: {policy.policy_id} - {policy.title}")
-            logger.debug(f"[Tree {index}/{total}] Policy details - Level: {policy.level}, Children: {len(policy.children)}, Conditions: {len(policy.conditions)}")
-
-            # Generate tree with timeout (parser is now lenient and won't raise ValueError)
-            if is_aggregator:
-                # Generate aggregator tree that routes to children
-                logger.debug(f"[Tree {index}/{total}] Generating aggregator tree with {len(policy.children)} child policies")
+            # Determine policy type based on children AND conditions
+            has_children = len(policy.children) > 0
+            has_conditions = len(policy.conditions) > 0
+            
+            # Decision logic:
+            # - Policies WITH conditions always get detailed trees (even if they have children)
+            # - Policies WITHOUT conditions but WITH children get routing trees
+            # - Policies WITHOUT conditions or children shouldn't exist, but treat as leaf
+            
+            if has_conditions:
+                # Has conditions → Generate detailed decision tree (leaf-style)
+                # Even if it has children, the conditions must be evaluated first
+                tree_type = "leaf-with-children" if has_children else "leaf"
+                logger.info(f"[Tree {index}/{total}] Starting generation for {tree_type} policy: {policy.policy_id} - {policy.title}")
+                logger.debug(f"[Tree {index}/{total}] Policy details - Level: {policy.level}, Children: {len(policy.children)}, Conditions: {len(policy.conditions)}")
+                logger.debug(f"[Tree {index}/{total}] Generating detailed tree for {len(policy.conditions)} conditions (parent: {policy.parent_id if policy.parent_id else 'None'})")
+                logger.debug(f"[Tree {index}/{total}] Retry configuration: max_retries={settings.openai_max_retries}, backoff={settings.openai_retry_min_wait}-{settings.openai_retry_max_wait}s")
+                tree = await asyncio.wait_for(
+                    self._generate_leaf_tree(policy),
+                    timeout=settings.openai_per_request_timeout
+                )
+            elif has_children:
+                # No conditions but has children → Generate routing tree (aggregator-style)
+                tree_type = "aggregator"
+                logger.info(f"[Tree {index}/{total}] Starting generation for {tree_type} policy: {policy.policy_id} - {policy.title}")
+                logger.debug(f"[Tree {index}/{total}] Policy details - Level: {policy.level}, Children: {len(policy.children)}, Conditions: {len(policy.conditions)}")
+                logger.debug(f"[Tree {index}/{total}] Generating routing tree for {len(policy.children)} child policies")
+                logger.debug(f"[Tree {index}/{total}] Retry configuration: max_retries={settings.openai_max_retries}, backoff={settings.openai_retry_min_wait}-{settings.openai_retry_max_wait}s")
                 tree = await asyncio.wait_for(
                     self._generate_aggregator_tree(policy),
                     timeout=settings.openai_per_request_timeout
                 )
             else:
-                # Generate leaf tree with parent context
-                logger.debug(f"[Tree {index}/{total}] Generating leaf tree (parent: {policy.parent_id if policy.parent_id else 'None'})")
+                # No conditions, no children → Should not happen, but treat as leaf
+                tree_type = "leaf"
+                logger.warning(f"[Tree {index}/{total}] Policy {policy.policy_id} has no conditions or children - generating simple leaf tree")
+                logger.info(f"[Tree {index}/{total}] Starting generation for {tree_type} policy: {policy.policy_id} - {policy.title}")
+                logger.debug(f"[Tree {index}/{total}] Retry configuration: max_retries={settings.openai_max_retries}, backoff={settings.openai_retry_min_wait}-{settings.openai_retry_max_wait}s")
                 tree = await asyncio.wait_for(
                     self._generate_leaf_tree(policy),
                     timeout=settings.openai_per_request_timeout
@@ -170,13 +209,25 @@ class DecisionTreeGenerator:
 
         except asyncio.TimeoutError:
             logger.error(
-                f"[Tree {index}/{total}] Timeout after {settings.openai_per_request_timeout}s - {policy.policy_id}: {policy.title}"
+                f"[Tree {index}/{total}] Timeout after {settings.openai_per_request_timeout}s (exhausted {settings.openai_max_retries} retry attempts) - {policy.policy_id}: {policy.title}"
+            )
+            logger.warning(
+                f"[Tree {index}/{total}] Consider increasing openai_per_request_timeout (current: {settings.openai_per_request_timeout}s) or reducing complexity"
+            )
+            return None
+
+        except (InternalServerError, APITimeoutError) as e:
+            logger.error(
+                f"[Tree {index}/{total}] LiteLLM proxy error after {settings.openai_max_retries} retries - {policy.policy_id}: {policy.title} - {type(e).__name__}: {e}"
+            )
+            logger.warning(
+                f"[Tree {index}/{total}] LiteLLM proxy may have infrastructure-level timeout limits. Error: {e}"
             )
             return None
 
         except Exception as e:
             logger.error(
-                f"[Tree {index}/{total}] Error generating tree - {policy.policy_id}: {policy.title} - {e}",
+                f"[Tree {index}/{total}] Error generating tree - {policy.policy_id}: {policy.title} - {type(e).__name__}: {e}",
                 exc_info=True
             )
             return None
@@ -438,7 +489,14 @@ class DecisionTreeGenerator:
 
     @retry(
         stop=stop_after_attempt(settings.openai_max_retries),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
+        wait=wait_exponential(
+            multiplier=settings.openai_retry_multiplier,
+            min=settings.openai_retry_min_wait,
+            max=settings.openai_retry_max_wait
+        ),
+        retry=retry_if_exception_type((InternalServerError, APITimeoutError, TimeoutError)),
+        before_sleep=before_sleep_log(logger, logger.level),
+        reraise=True,
     )
     async def _generate_aggregator_tree(self, policy: SubPolicy) -> DecisionTree:
         """
@@ -539,7 +597,14 @@ class DecisionTreeGenerator:
 
     @retry(
         stop=stop_after_attempt(settings.openai_max_retries),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
+        wait=wait_exponential(
+            multiplier=settings.openai_retry_multiplier,
+            min=settings.openai_retry_min_wait,
+            max=settings.openai_retry_max_wait
+        ),
+        retry=retry_if_exception_type((InternalServerError, APITimeoutError, TimeoutError)),
+        before_sleep=before_sleep_log(logger, logger.level),
+        reraise=True,
     )
     async def _generate_leaf_tree(self, policy: SubPolicy) -> DecisionTree:
         """

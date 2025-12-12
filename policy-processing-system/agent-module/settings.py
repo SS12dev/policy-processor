@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     server_reload: bool = False
     log_level: str = "INFO"
 
-    # ===== Agent Metadata =====
+    # ===== Agent Metadata ===== 
     agent_name: str = "Policy Document Processor Agent"
     agent_version: str = "4.0.0"
     agent_description: str = "Stateless policy document processor with Redis-based temporary storage. Processes PDFs and generates hierarchical decision trees with eligibility questions. Powered by LangGraph state machine."
@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.1
     llm_max_tokens: int = 4000
     llm_streaming: bool = True
-    llm_timeout: int = 120
+    llm_timeout: int = 300  # Increased from 120 to support long-running LLM operations
     llm_max_retries: int = 3
 
     # ===== OpenAI Configuration =====
@@ -48,8 +48,14 @@ class Settings(BaseSettings):
     openai_model_secondary: str = "gpt-4o"
     openai_temperature: float = 0.1
     openai_max_tokens: int = 4000
-    openai_timeout: int = 120
-    openai_max_retries: int = 3
+    openai_timeout: int = 300  # Increased from 120 to support long-running LLM operations
+    openai_max_retries: int = 5  # Increased from 3 to 5 for LiteLLM proxy timeout resilience
+    openai_max_concurrent_requests: int = 2  # Reduced from 5 to 2 to avoid rate/token limiting on LiteLLM proxy
+    openai_per_request_timeout: int = 300  # Increased from 60 to 300 for complex tree generation
+    openai_retry_on_timeout: bool = True  # Retry on 504 Gateway Timeout errors
+    openai_retry_multiplier: int = 2  # Exponential backoff multiplier
+    openai_retry_min_wait: int = 4  # Minimum wait between retries (seconds)
+    openai_retry_max_wait: int = 30  # Maximum wait between retries (seconds)
 
     # ===== Azure OpenAI Configuration =====
     azure_openai_api_key: Optional[str] = None
@@ -74,6 +80,12 @@ class Settings(BaseSettings):
     enable_streaming: bool = True
     stream_chunk_size: int = 1024
 
+    # ===== Chunking Configuration =====
+    target_chunk_tokens: int = 3000  # Target tokens per chunk for LLM processing
+    max_chunk_tokens: int = 4000  # Maximum tokens per chunk
+    min_chunk_tokens: int = 500  # Minimum tokens per chunk
+    chunk_overlap: int = 200  # Overlap between chunks for context preservation
+
     # ===== Processing Limits =====
     max_pages_per_document: int = 500
     max_policies_per_document: int = 100
@@ -93,7 +105,7 @@ class Settings(BaseSettings):
     log_format: str = "json"  # Options: json, text
     log_file: Optional[str] = "logs/agent.log"
     log_rotation: str = "10MB"
-    log_retention: str = "30 days"
+    log_retention_days: int = 30
     log_compression: bool = True
 
     # ===== Metrics Configuration =====

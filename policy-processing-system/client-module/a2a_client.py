@@ -1,435 +1,225 @@
 """
-A2A Client for Streamlit Application.
+A2A Client for Policy Processing System
+Based on working document-analysis-system implementation.
 """
-import httpx
-import json
-import uuid
-import base64
-from typing import Dict, Any, Optional
-from pathlib import Path
 
+import asyncio
+import base64
+from typing import Optional, AsyncIterator, Dict, Any
+import httpx
+
+from a2a import types
+from a2a.client import Client, ClientConfig, ClientFactory
+
+from settings import settings
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
-class A2AClient:
-    """
-    Client for communicating with the A2A server.
+class PolicyProcessingClient:
+    """Async client for policy processing agent using A2A SDK."""
 
-    Uses JSON-RPC 2.0 protocol to send messages to the Policy Processor Agent.
-    """
+    def __init__(self):
+        """Initialize the client."""
+        self.agent_url = settings.agent_url
+        self.timeout = settings.agent_timeout
+        self.prefer_streaming = settings.agent_prefer_streaming
 
-    def __init__(self, base_url: str = "http://localhost:8001", timeout: float = 300.0):
-        """
-        Initialize A2A client.
+        self.http_client: Optional[httpx.AsyncClient] = None
+        self.a2a_client: Optional[Client] = None
+        self.agent_card: Optional[types.AgentCard] = None
+        
+        logger.info(f"[CLIENT] Initialized: {self.agent_url}")
 
-        Args:
-            base_url: Base URL of the A2A server
-            timeout: Request timeout in seconds (default: 300s for long processing)
-        """
-        self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
-        self.session_id = str(uuid.uuid4())
-        logger.info(f"A2A Client initialized: {self.base_url}")
+    async def connect(self):
+        """Connect to the agent and fetch its card."""
+        self.http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(self.timeout, connect=10.0)
+        )
+
+        agent_card_url = f"{self.agent_url}/.well-known/agent-card.json"
+        try:
+            response = await self.http_client.get(agent_card_url)
+            response.raise_for_status()
+            card_dict = response.json()
+            self.agent_card = types.AgentCard(**card_dict)
+
+            client_config = ClientConfig(
+                streaming=self.prefer_streaming,
+                polling=not self.prefer_streaming,
+                httpx_client=self.http_client
+            )
+
+            factory = ClientFactory(config=client_config)
+            self.a2a_client = factory.create(card=self.agent_card)
+
+            logger.info(f"[CLIENT] Connected to agent: {self.agent_card.name} v{self.agent_card.version}")
+            return True
+
+        except Exception as e:
+            logger.error(f"[CLIENT] Failed to connect: {str(e)}")
+            raise ConnectionError(f"Failed to connect to agent: {str(e)}")
+
+    async def close(self):
+        """Close the connection."""
+        if self.http_client:
+            try:
+                await self.http_client.aclose()
+            except RuntimeError as e:
+                # Suppress "asynchronous generator is already running" errors during cleanup
+                if "asynchronous generator is already running" not in str(e):
+                    raise
 
     async def check_health(self) -> bool:
-        """
-        Check if the A2A server is healthy and responding.
-
-        Returns:
-            True if server is healthy, False otherwise
-        """
+        """Check if the agent is healthy."""
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{self.base_url}/health",
-                    timeout=5.0
-                )
-                if response.status_code == 200:
-                    health_data = response.json()
-                    logger.debug(f"[CLIENT] Health check OK: {health_data}")
-                    return True
-                return False
+            if not self.http_client:
+                self.http_client = httpx.AsyncClient(timeout=httpx.Timeout(5.0))
+            
+            response = await self.http_client.get(f"{self.agent_url}/health")
+            response.raise_for_status()
+            return response.json().get("status") == "healthy"
         except Exception as e:
-            logger.debug(f"[CLIENT] Health check failed: {e}")
+            logger.error(f"[CLIENT] Health check failed: {str(e)}")
             return False
-
-    async def get_agent_card(self) -> Optional[Dict[str, Any]]:
-        """
-        Retrieve the agent card from the A2A server.
-
-        Returns:
-            Agent card dictionary or None if failed
-        """
-        try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    f"{self.base_url}/.well-known/agent-card",
-                    timeout=10.0
-                )
-                response.raise_for_status()
-                card = response.json()
-                logger.info(f"Retrieved agent card: {card.get('name', 'Unknown')}")
-                return card
-        except Exception as e:
-            logger.error(f"Failed to get agent card: {e}")
-            return None
 
     async def process_document(
         self,
-        pdf_bytes: bytes,
-        filename: str = "document.pdf",
+        file_bytes: bytes,
+        filename: str,
         use_gpt4: bool = False,
         enable_streaming: bool = True,
-        confidence_threshold: float = 0.7
-    ) -> Dict[str, Any]:
+        confidence_threshold: float = 0.7,
+        context_id: Optional[str] = None
+    ) -> AsyncIterator[Dict[str, Any]]:
         """
-        Process a policy document.
+        Process a policy document with streaming updates.
 
         Args:
-            pdf_bytes: PDF file bytes
+            file_bytes: PDF file bytes
             filename: Original filename
-            use_gpt4: Whether to use GPT-4 for extraction
-            enable_streaming: Enable streaming progress updates
+            use_gpt4: Use GPT-4 for extraction
+            enable_streaming: Enable streaming responses
             confidence_threshold: Minimum confidence threshold
+            context_id: Optional conversation context ID
 
-        Returns:
-            Processing result with job_id and status
+        Yields:
+            Processing updates and final results
         """
+        if not self.a2a_client:
+            await self.connect()
+
+        if not context_id:
+            import uuid
+            context_id = str(uuid.uuid4())
+
+        pdf_base64 = base64.b64encode(file_bytes).decode()
+
+        logger.info(f"[CLIENT] Processing: {filename} ({len(file_bytes)} bytes)")
+        logger.info(f"[CLIENT] Context ID: {context_id}")
+
         try:
-            logger.info(f"Processing document: {filename} ({len(pdf_bytes)} bytes)")
-
-            # Encode PDF as base64
-            document_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
-
-            # Build parameters
-            parameters = {
-                "document_base64": document_base64,
+            # Build parameters JSON for the agent to extract
+            import json
+            parameters_json = json.dumps({
+                "document_base64": pdf_base64,
                 "use_gpt4": use_gpt4,
                 "enable_streaming": enable_streaming,
                 "confidence_threshold": confidence_threshold
-            }
-
-            # Send request
-            result = await self._send_jsonrpc_request(
-                skill_id="process_policy",
-                message_text=f"Process policy document: {filename}",
-                parameters=parameters
-            )
-
-            logger.info(f"Document processing response: {json.dumps(result, default=str)[:200]}")
-            return result
-
-        except Exception as e:
-            logger.error(f"Error processing document: {e}", exc_info=True)
-            return {
-                "status": "failed",
-                "message": f"Error: {str(e)}"
-            }
-
-    async def get_results(self, job_id: str) -> Dict[str, Any]:
-        """
-        Get processing results for a job.
-
-        Args:
-            job_id: The job ID to retrieve results for
-
-        Returns:
-            Processing results
-        """
-        try:
-            logger.info(f"Getting results for job {job_id}")
-
-            parameters = {"job_id": job_id}
-
-            result = await self._send_jsonrpc_request(
-                skill_id="process_policy",
-                message_text=f"Get results for job {job_id}",
-                parameters=parameters
-            )
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Error getting results: {e}", exc_info=True)
-            return {
-                "status": "error",
-                "message": f"Error: {str(e)}"
-            }
-
-    async def _send_jsonrpc_request(
-        self,
-        skill_id: str,
-        message_text: str,
-        parameters: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """
-        Send a JSON-RPC 2.0 request to the A2A server.
-
-        Args:
-            skill_id: Skill identifier
-            message_text: Message text
-            parameters: Parameters for the skill
-
-        Returns:
-            Response data
-
-        Raises:
-            Exception: If the request fails
-        """
-        try:
-            # Generate IDs (let server manage task_id lifecycle)
-            context_id = str(uuid.uuid4())
-            message_id = str(uuid.uuid4())
-            request_id = str(uuid.uuid4())
-
-            logger.info(f"[CLIENT] Generated context_id: {context_id}")
-            logger.info(f"[CLIENT] Generated message_id: {message_id}")
-
-            # Build A2A message payload (using snake_case for A2A SDK)
-            # NOTE: Not including task_id - let the server create and manage it
-            message_payload = {
-                "message_id": message_id,
-                "role": "user",
-                "parts": [
-                    {
-                        "kind": "text",
-                        "text": message_text
-                    }
+            })
+            
+            message = types.Message(
+                message_id=f"msg_{context_id}",
+                role=types.Role.user,
+                parts=[
+                    types.Part(root=types.FilePart(
+                        file=types.FileWithBytes(
+                            bytes=pdf_base64,
+                            name=filename,
+                            mime_type="application/pdf"
+                        )
+                    )),
+                    types.Part(root=types.TextPart(
+                        text=parameters_json  # Send parameters as JSON string
+                    ))
                 ],
-                "context_id": context_id
-            }
+                context_id=context_id
+            )
 
-            # Build metadata
-            metadata = {
-                "skill_id": skill_id,
-                "parameters": parameters or {}
-            }
-
-            # Build JSON-RPC request (A2A SDK expects "message/send" method)
-            jsonrpc_request = {
-                "jsonrpc": "2.0",
-                "method": "message/send",
-                "params": {
-                    "message": message_payload,
-                    "metadata": metadata
-                },
-                "id": request_id
-            }
-
-            logger.info(f"[CLIENT] ========== Sending JSON-RPC Request ==========")
-            logger.info(f"[CLIENT] URL: {self.base_url}/jsonrpc")
-            logger.info(f"[CLIENT] Method: {jsonrpc_request['method']}")
-            logger.info(f"[CLIENT] Request ID: {request_id}")
-            logger.info(f"[CLIENT] Message payload keys: {list(message_payload.keys())}")
-            logger.info(f"[CLIENT] Metadata: {metadata}")
-            logger.info(f"[CLIENT] Full request (truncated): {json.dumps(jsonrpc_request, default=str)[:500]}...")
-
-            # Send request
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    f"{self.base_url}/jsonrpc",
-                    json=jsonrpc_request,
-                    timeout=self.timeout,
-                    headers={"Content-Type": "application/json"}
-                )
-                response.raise_for_status()
-
-                result = response.json()
-                logger.info(f"[CLIENT] ========== Received JSON-RPC Response ==========")
-                logger.info(f"[CLIENT] Response status: {response.status_code}")
-                logger.info(f"[CLIENT] Response keys: {list(result.keys())}")
-                logger.info(f"[CLIENT] Full response (truncated): {json.dumps(result, default=str)[:500]}...")
-
-                # Check for JSON-RPC error
-                if "error" in result:
-                    error = result["error"]
-                    error_code = error.get("code", "unknown")
-                    error_msg = error.get("message", "Unknown error")
-                    error_data = error.get("data", None)
-                    logger.error(f"[CLIENT] JSON-RPC Error:")
-                    logger.error(f"[CLIENT]   Code: {error_code}")
-                    logger.error(f"[CLIENT]   Message: {error_msg}")
-                    logger.error(f"[CLIENT]   Data: {error_data}")
-                    raise Exception(f"A2A Error: {error_msg}")
-
-                # Extract the result
-                if "result" in result:
-                    logger.info(f"[CLIENT] Success! Parsing A2A response...")
-                    return self._parse_a2a_response(result["result"])
-                else:
-                    logger.error(f"[CLIENT] Invalid response - missing 'result' field")
-                    raise Exception("Invalid A2A response format")
-
-        except httpx.HTTPError as e:
-            logger.error(f"HTTP error: {e}")
-            raise Exception(f"Failed to connect to A2A server: {str(e)}")
-        except Exception as e:
-            logger.error(f"Error sending JSON-RPC request: {e}")
-            raise
-
-    def _parse_a2a_response(self, result: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Parse the A2A response and extract relevant data.
-
-        Args:
-            result: The result from the JSON-RPC response
-
-        Returns:
-            Parsed response data
-        """
-        try:
-            # The result typically contains messages or task status
-            if "messages" in result:
-                messages = result["messages"]
-                if messages and len(messages) > 0:
-                    # Get the last message from the agent
-                    last_message = messages[-1]
-                    if "parts" in last_message:
-                        # Extract text from parts
-                        text_parts = [
-                            part.get("text", "") for part in last_message["parts"]
-                            if part.get("kind") == "text"
-                        ]
-                        response_text = "\n".join(text_parts)
-
-                        # Extract JSON from markdown code block if present
-                        # Pattern: ```json\n{...}\n```
-                        if "```json" in response_text:
-                            try:
-                                # Find the JSON block
-                                json_start = response_text.find("```json") + 7
-                                json_end = response_text.find("```", json_start)
-                                if json_end > json_start:
-                                    json_text = response_text[json_start:json_end].strip()
-                                    parsed_data = json.loads(json_text)
-
-                                    # Extract job_id from the message if available
-                                    job_id = None
-                                    if "**Job ID:**" in response_text:
-                                        # Extract job_id from markdown
-                                        job_id_start = response_text.find("**Job ID:**") + 11
-                                        job_id_end = response_text.find("\n", job_id_start)
-                                        job_id_text = response_text[job_id_start:job_id_end].strip()
-                                        # Remove markdown code formatting
-                                        job_id = job_id_text.strip("`").strip()
-
-                                    return {
-                                        "status": "completed",
-                                        "job_id": job_id or parsed_data.get("job_id"),
-                                        "results": parsed_data,
-                                        "message": response_text
-                                    }
-                            except (json.JSONDecodeError, ValueError) as e:
-                                logger.warning(f"Failed to parse JSON from code block: {e}")
-
-                        # Try to parse as JSON if it looks like JSON
-                        if response_text.strip().startswith("{"):
-                            try:
-                                return json.loads(response_text)
-                            except json.JSONDecodeError:
-                                pass
-
-                        # Check if this is an error message
-                        if response_text.startswith("ERROR:"):
-                            return {
-                                "status": "failed",
-                                "message": response_text.replace("ERROR:", "").strip(),
-                                "task_id": result.get("taskId")
+            logger.info("[CLIENT] Sending request to agent...")
+            
+            task_id = None
+            final_results = None
+            
+            async for event in self.a2a_client.send_message(message):
+                # A2A SDK returns events as (task, update) tuples
+                if isinstance(event, tuple):
+                    task, update = event
+                    task_id = task.id
+                    
+                    if isinstance(update, types.TaskStatusUpdateEvent):
+                        status = update.status.state.value
+                        logger.info(f"[CLIENT] Status: {status}")
+                        
+                        status_text = ""
+                        if update.status.message and update.status.message.parts:
+                            for part in update.status.message.parts:
+                                if isinstance(part.root, types.TextPart):
+                                    status_text = part.root.text
+                                    break
+                        
+                        yield {
+                            "type": "status",
+                            "status": status,
+                            "message": status_text,
+                            "task_id": task_id,
+                            "final": update.final
+                        }
+                        
+                    elif isinstance(update, types.TaskArtifactUpdateEvent):
+                        logger.info(f"[CLIENT] Artifact: {update.artifact.name}")
+                        
+                        if update.artifact.parts:
+                            for part in update.artifact.parts:
+                                if isinstance(part.root, types.DataPart):
+                                    final_results = part.root.data
+                                    logger.info(f"[CLIENT] Results received")
+                        
+                        yield {
+                            "type": "artifact",
+                            "artifact_id": update.artifact.artifact_id,
+                            "name": update.artifact.name,
+                            "data": final_results,
+                            "task_id": task_id,
+                            "last_chunk": update.last_chunk
+                        }
+                        
+                        if update.last_chunk and final_results:
+                            yield {
+                                "type": "complete",
+                                "status": "completed",
+                                "job_id": task_id,
+                                "results": final_results,
+                                "message": "Processing completed"
                             }
 
-                        # Return as text response
-                        return {"response": response_text, "raw": result}
-
-            # Check for direct parts in result (not wrapped in messages)
-            # This handles the case where response comes directly without messages wrapper
-            if "parts" in result:
-                parts = result.get("parts", [])
-                if parts and len(parts) > 0:
-                    text = parts[0].get("text", "")
-
-                    # Check for error first
-                    if text.startswith("ERROR:"):
-                        return {
-                            "status": "failed",
-                            "message": text.replace("ERROR:", "").strip(),
-                            "task_id": result.get("taskId")
-                        }
-
-                    # Try to extract JSON from markdown code block
-                    if "```json" in text:
-                        try:
-                            json_start = text.find("```json") + 7
-                            json_end = text.find("```", json_start)
-                            if json_end > json_start:
-                                json_text = text[json_start:json_end].strip()
-                                parsed_data = json.loads(json_text)
-
-                                # Extract job_id from the message if available
-                                job_id = None
-                                if "**Job ID:**" in text:
-                                    job_id_start = text.find("**Job ID:**") + 11
-                                    job_id_end = text.find("\n", job_id_start)
-                                    job_id_text = text[job_id_start:job_id_end].strip()
-                                    job_id = job_id_text.strip("`").strip()
-
-                                return {
-                                    "status": "completed",
-                                    "job_id": job_id or parsed_data.get("job_id") or result.get("taskId"),
-                                    "results": parsed_data,
-                                    "message": text
-                                }
-                        except (json.JSONDecodeError, ValueError) as e:
-                            logger.warning(f"Failed to parse JSON from direct parts: {e}")
-
-            # If task_id is present, return it
-            if "taskId" in result:
-                return {"task_id": result["taskId"], "raw": result}
-
-            # Return raw result if we can't parse it
-            return result
-
         except Exception as e:
-            logger.error(f"Error parsing A2A response: {e}")
-            return result
+            logger.error(f"[CLIENT] Error: {str(e)}", exc_info=True)
+            yield {
+                "type": "error",
+                "status": "failed",
+                "message": f"Processing failed: {str(e)}"
+            }
 
 
-# Synchronous wrapper for use in Streamlit
-class A2AClientSync:
-    """Synchronous wrapper for A2AClient for use in Streamlit."""
+# Global client instance
+_client: Optional[PolicyProcessingClient] = None
 
-    def __init__(self, base_url: str = "http://localhost:8001", timeout: float = 300.0):
-        """Initialize sync client."""
-        self.client = A2AClient(base_url, timeout)
 
-    def check_health(self) -> bool:
-        """Check server health (sync)."""
-        import asyncio
-        return asyncio.run(self.client.check_health())
-
-    def get_agent_card(self) -> Optional[Dict[str, Any]]:
-        """Get agent card (sync)."""
-        import asyncio
-        return asyncio.run(self.client.get_agent_card())
-
-    def process_document(
-        self,
-        pdf_bytes: bytes,
-        filename: str = "document.pdf",
-        use_gpt4: bool = False,
-        enable_streaming: bool = True,
-        confidence_threshold: float = 0.7
-    ) -> Dict[str, Any]:
-        """Process document (sync)."""
-        import asyncio
-        return asyncio.run(
-            self.client.process_document(
-                pdf_bytes, filename, use_gpt4, enable_streaming, confidence_threshold
-            )
-        )
-
-    def get_results(self, job_id: str) -> Dict[str, Any]:
-        """Get results (sync)."""
-        import asyncio
-        return asyncio.run(self.client.get_results(job_id))
+def get_client() -> PolicyProcessingClient:
+    """Get or create the global client instance."""
+    global _client
+    if _client is None:
+        _client = PolicyProcessingClient()
+    return _client

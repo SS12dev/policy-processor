@@ -1,0 +1,62 @@
+{
+  "agent_info": {
+    "name": "PDF Document Analyzer",
+    "version": "1.0.0",
+    "started_at": "2025-12-11T19:23:19.888621"
+  },
+  "requests": {
+    "total": 1,
+    "successful": 1,
+    "failed": 0,
+    "by_status": {
+      "successful": 1
+    }
+  },
+  "processing": {
+    "total_documents": 1,
+    "total_processing_time_seconds": 15.683220624923706,
+    "average_processing_time_seconds": 15.683220624923706,
+    "by_node": {
+      "pdf_validator": {
+        "executions": 1,
+        "total_time": 0.0009946823120117188,
+        "average_time": 0.0009946823120117188
+      },
+      "pdf_parser": {
+        "executions": 1,
+        "total_time": 3.1960015296936035,
+        "average_time": 3.1960015296936035
+      },
+      "heading_extractor": {
+        "executions": 1,
+        "total_time": 0.003007650375366211,
+        "average_time": 0.003007650375366211
+      },
+      "keyword_extractor": {
+        "executions": 1,
+        "total_time": 7.396108150482178,
+        "average_time": 7.396108150482178
+      },
+      "llm_analyzer": {
+        "executions": 1,
+        "total_time": 4.44618821144104,
+        "average_time": 4.44618821144104
+      },
+      "response_formatter": {
+        "executions": 1,
+        "total_time": 0.0009944438934326172,
+        "average_time": 0.0009944438934326172
+      }
+    }
+  },
+  "llm": {
+    "total_calls": 0,
+    "total_tokens": 0,
+    "total_cost_estimate": 0.0,
+    "by_model": {}
+  },
+  "errors": {
+    "total": 0,
+    "by_type": {}
+  }
+}

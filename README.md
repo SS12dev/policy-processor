@@ -1,390 +1,536 @@
-# Policy Document Processor
+# A2A SDK Comprehensive Guide
 
-Advanced LangGraph-powered system for processing policy documents into structured decision trees with conditional routing, interactive visualization, and comprehensive editing capabilities.
+Complete exploratory research and implementation guide for Google's Agent-to-Agent (A2A) Protocol Python SDK.
+
+## Table of Contents
+
+1. [Introduction](#introduction)
+2. [What is the A2A Protocol?](#what-is-the-a2a-protocol)
+3. [Key Features](#key-features)
+4. [Installation](#installation)
+5. [Quick Start](#quick-start)
+6. [Architecture Overview](#architecture-overview)
+7. [Examples Directory](#examples-directory)
+8. [Guides](#guides)
+9. [Message Size Limits and Configuration](#message-size-limits-and-configuration)
+10. [File Attachments](#file-attachments)
+11. [Streaming vs Non-Streaming](#streaming-vs-non-streaming)
+12. [LangGraph Integration](#langgraph-integration)
+13. [Resources](#resources)
+
+## Introduction
+
+This repository contains comprehensive research, documentation, and working examples for the **A2A (Agent-to-Agent) Protocol Python SDK** developed by Google. The A2A protocol enables standardized communication between AI agents, creating interoperable agent ecosystems that can collaborate to solve complex problems.
+
+## What is the A2A Protocol?
+
+The A2A protocol is an open standard that defines:
+
+- **Standardized Message Format**: Common structure for agent communication
+- **Task Management**: Lifecycle management for agent tasks
+- **Streaming Support**: Real-time progressive responses
+- **Authentication**: Security schemes for agent-to-agent communication
+- **Agent Discovery**: Agent cards for capability advertisement
+
+### Key Benefits
+
+1. **Interoperability**: Agents from different frameworks can communicate
+2. **Flexibility**: Support for various communication patterns (sync/async, streaming/polling)
+3. **Scalability**: Built on modern async Python for high performance
+4. **Protocol Agnostic**: Supports JSON-RPC, gRPC, and REST
 
 ## Key Features
 
-### Decision Trees with Conditional Routing
-- Explicit routing rules for every question and answer path
-- Support for yes/no, multiple-choice, and numeric range questions
-- AND/OR logic grouping for complex policy conditions
-- Complete path coverage validation
-- Multiple outcome types: approved, denied, review, documentation required
+### What the A2A SDK Provides
 
-### Interactive Tile-Based Visualization
-- Vertical tree layout with indentation showing hierarchy
-- Color-coded nodes by type (questions, decisions, outcomes)
-- Collapsible branches for easy navigation
-- Answer labels showing conditional flow
-- Path highlighting and tracing
-- Side-by-side PDF comparison
+1. **Client-Side**:
+   - Easy client creation for connecting to A2A agents
+   - Automatic protocol negotiation (streaming vs non-streaming)
+   - Connection management and error handling
+   - Event consumers for processing agent responses
+   - Task resubscription for connection recovery
 
-### Full Editing Capabilities
-- Visual tree editor with inline editing
-- Add, remove, and reorder nodes
-- Configure routing rules through GUI
-- Path validation and completeness checking
-- Bulk operations and import/export
+2. **Server-Side**:
+   - FastAPI and Starlette application integrations
+   - Agent executor abstraction
+   - Built-in task management and state handling
+   - Event queue system for async processing
+   - Automatic agent card serving
 
-### Intelligent Processing
-- Semantic-aware document chunking
-- Hierarchical policy extraction
-- Confidence-based validation
-- Automatic retry for low-confidence sections
-- Source reference tracking
+3. **Type System**:
+   - Comprehensive Pydantic models for all protocol types
+   - Message parts: TextPart, FilePart, DataPart
+   - File handling: FileWithBytes (base64), FileWithUri (URL reference)
+   - Artifact system for structured outputs
+
+4. **Advanced Features**:
+   - Multi-turn conversations with context management
+   - Streaming responses with progressive updates
+   - Push notifications configuration
+   - Middleware/interceptor support
+   - LangGraph integration patterns
+
+## Installation
+
+```bash
+# Basic installation
+pip install a2a-sdk
+
+# With development dependencies
+pip install a2a-sdk[dev]
+
+# Additional dependencies for examples
+pip install uvicorn fastapi langgraph langchain langchain-core
+```
+
+### Requirements
+
+- Python >= 3.10
+- httpx >= 0.28.1
+- pydantic >= 2.11.3
+- protobuf >= 5.29.5
 
 ## Quick Start
 
-### Prerequisites
-- Python 3.10+
-- OpenAI API key
-- Redis server
-- Tesseract OCR (optional, for scanned PDFs)
-
-### Installation
-
-```bash
-# Clone and setup
-git clone <repository-url>
-cd policy-processor
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Configure environment
-cp .env.example .env
-# Edit .env with:
-# - OPENAI_API_KEY=your-key
-# - REDIS_HOST=localhost
-# - REDIS_PORT=6379
-
-# Start Redis
-redis-server
-
-# Run migrations
-python migrate_add_policy_name.py
-```
-
-### Running the Application
-
-**Terminal 1 - Start A2A Server:**
-```bash
-python main_a2a.py
-```
-Server available at http://localhost:8001
-
-**Terminal 2 - Start Streamlit UI:**
-```bash
-streamlit run app/streamlit_app/app.py
-```
-UI available at http://localhost:8501
-
-## Usage Guide
-
-### Processing a Policy Document
-
-1. **Upload & Process Tab**
-   - Enter unique policy name
-   - Upload PDF document
-   - Configure options:
-     - Use GPT-4 for complex sections
-     - Set confidence threshold (default: 0.7)
-   - Click "Process Document"
-   - Monitor real-time progress
-
-2. **View Generated Trees**
-   - Navigate to "View Policy" tab
-   - Select policy from dropdown
-   - Choose visualization mode:
-     - Interactive Tree Explorer (tile-based)
-     - Side-by-Side (PDF + Tree)
-     - Summary (traditional text)
-
-3. **Edit and Refine**
-   - Navigate to "Review & Edit" tab
-   - Load policy
-   - Enable editing mode
-   - Modify structure:
-     - Edit questions and routing
-     - Add/remove nodes
-     - Configure conditional paths
-     - Set outcome types
-   - Save changes
-
-## Architecture
-
-### System Components
-
-```
-Streamlit UI
-    ├── Upload & Process (Tab 1)
-    ├── View Policy (Tab 2)
-    └── Review & Edit (Tab 3)
-         │
-         ▼ (A2A Protocol)
-A2A Server (FastAPI)
-    └── PolicyProcessorAgent
-         └── LangGraph Orchestrator
-              ├── parse_pdf_node
-              ├── analyze_document_node
-              ├── chunk_document_node (semantic)
-              ├── extract_policy_node
-              ├── generate_trees_node (with routing)
-              ├── validate_results_node
-              └── retry_logic_node
-                   │
-                   ▼
-Database (SQLite)
-    ├── ProcessingJobs
-    ├── PolicyDocuments
-    └── ProcessingResults
-```
-
-### Decision Tree Structure
-
-Enhanced node types with routing:
+### Server Example
 
 ```python
-{
-  "node_id": "age_check",
-  "node_type": "question",
-  "question": {
-    "question_text": "Are you 18 or older?",
-    "question_type": "yes_no"
-  },
-  "children": {
-    "yes": { /* next question */ },
-    "no": { /* denial outcome */ }
-  },
-  "routing_rules": [{
-    "answer_value": "yes",
-    "comparison": "equals",
-    "next_node_id": "insurance_check"
-  }],
-  "confidence_score": 0.95
-}
+from a2a import types
+from a2a.server import AgentExecutor, A2AFastAPIApplication
+
+class MyAgent(AgentExecutor):
+    async def execute(self, request_context):
+        # Extract user message
+        user_text = request_context.user_message.parts[0].root.text
+
+        # Yield status update
+        yield types.TaskStatusUpdateEvent(
+            task_id=request_context.task_id,
+            context_id=request_context.context_id,
+            status=types.TaskStatus(state=types.TaskState.WORKING),
+            final=False
+        )
+
+        # Yield response
+        yield types.Message(
+            message_id="msg_1",
+            role=types.Role.AGENT,
+            parts=[types.Part(root=types.TextPart(text=f"Echo: {user_text}"))]
+        )
+
+# Create server
+app = A2AFastAPIApplication(
+    agent_card=types.AgentCard(name="My Agent", ...),
+    agent_executor=MyAgent()
+)
 ```
 
-## Core Components
+### Client Example
 
-### Decision Tree Generation (`app/core/decision_tree_generator.py`)
-- Generates trees with explicit routing
-- Validates path completeness
-- Handles hierarchical policies
-- Supports AND/OR logic
-
-### Tree Validation (`app/core/tree_validator.py`)
-- Validates routing completeness
-- Checks node reachability
-- Identifies incomplete paths
-- Validates logic groups
-
-### Tile Visualizer (`app/streamlit_app/components/tree_visualizer.py`)
-- Renders vertical tile-based trees
-- Color-codes node types
-- Shows answer labels
-- Supports path highlighting
-
-### Enhanced Prompts (`app/core/tree_generation_prompts.py`)
-- Structured prompts for routing generation
-- Validation instructions
-- Complete path coverage requirements
-
-## Configuration
-
-### Environment Variables
-```bash
-# Required
-OPENAI_API_KEY=your-openai-api-key
-
-# Optional
-REDIS_HOST=localhost
-REDIS_PORT=6379
-REDIS_DB=0
-
-# Model Configuration
-OPENAI_MODEL_PRIMARY=gpt-4o-mini      # For extraction
-OPENAI_MODEL_SECONDARY=gpt-4o         # For tree generation
-MAX_CONCURRENT_REQUESTS=5
-PER_REQUEST_TIMEOUT=300
-```
-
-### Processing Options
-- `use_gpt4`: Use GPT-4 for complex sections
-- `confidence_threshold`: Minimum confidence (0-1)
-- `enable_streaming`: Real-time updates
-- `max_depth`: Maximum hierarchy depth
-
-## API Reference
-
-### Tree Generation
 ```python
-from app.core.decision_tree_generator import DecisionTreeGenerator
+from a2a import types
+from a2a.client import Client, ClientConfig, JsonRpcHttpClientTransport
+import httpx
 
-generator = DecisionTreeGenerator(use_gpt4=True)
-tree = await generator.generate_tree_for_policy(policy)
+async with httpx.AsyncClient() as http_client:
+    # Fetch agent card
+    card = await fetch_agent_card(http_client, "http://localhost:8000")
+
+    # Create client
+    transport = JsonRpcHttpClientTransport(
+        http_client=http_client,
+        base_url="http://localhost:8000/rpc"
+    )
+    client = Client.create(
+        card=card,
+        config=ClientConfig(prefer_streaming=True),
+        transport=transport
+    )
+
+    # Send message
+    message = types.Message(
+        message_id="msg_1",
+        role=types.Role.USER,
+        parts=[types.Part(root=types.TextPart(text="Hello!"))]
+    )
+
+    async for event in client.send_message(message):
+        # Process events
+        print(event)
 ```
 
-### Tree Validation
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        A2A Protocol Layer                   │
+│  (Message Format, Task Management, Streaming, Security)     │
+└─────────────────────────────────────────────────────────────┘
+                            │
+        ┌───────────────────┴───────────────────┐
+        │                                       │
+┌───────▼────────┐                     ┌───────▼────────┐
+│   A2A Client   │                     │   A2A Server   │
+│                │                     │                │
+│ - Transport    │                     │ - FastAPI App  │
+│ - Streaming    │                     │ - Executor     │
+│ - Consumers    │                     │ - Task Manager │
+│ - Middleware   │                     │ - Event Queue  │
+└────────────────┘                     └────────────────┘
+        │                                       │
+        │                                       │
+┌───────▼────────┐                     ┌───────▼────────┐
+│ Your Client    │                     │  Your Agent    │
+│ Application    │◄───────────────────►│  (LangGraph,   │
+│                │      HTTP/gRPC      │   CrewAI, etc) │
+└────────────────┘                     └────────────────┘
+```
+
+## Examples Directory
+
+All examples are located in the [`examples/`](examples/) directory:
+
+| File | Description |
+|------|-------------|
+| [01_simple_agent_server.py](examples/01_simple_agent_server.py) | Basic non-streaming agent server |
+| [02_streaming_agent_server.py](examples/02_streaming_agent_server.py) | Streaming agent with progressive updates |
+| [03_non_streaming_client.py](examples/03_non_streaming_client.py) | Client for non-streaming interactions |
+| [04_streaming_client.py](examples/04_streaming_client.py) | Client for streaming interactions |
+| [05_document_processing_agent.py](examples/05_document_processing_agent.py) | Agent that handles file uploads |
+| [06_document_processing_client.py](examples/06_document_processing_client.py) | Client that sends files to agents |
+| [07_langgraph_agent_server.py](examples/07_langgraph_agent_server.py) | LangGraph integration example |
+
+### Running the Examples
+
+1. **Start a server**:
+   ```bash
+   python examples/01_simple_agent_server.py
+   ```
+
+2. **Run the corresponding client** (in another terminal):
+   ```bash
+   python examples/03_non_streaming_client.py
+   ```
+
+## Guides
+
+Comprehensive guides are available in the [`guides/`](guides/) directory:
+
+- [Message Structure Guide](guides/01_message_structure.md) - Understanding A2A messages and parts
+- [Server Implementation Guide](guides/02_server_implementation.md) - Building A2A servers
+- [Client Implementation Guide](guides/03_client_implementation.md) - Building A2A clients
+- [Streaming Guide](guides/04_streaming.md) - Implementing streaming responses
+- [File Handling Guide](guides/05_file_handling.md) - Working with file attachments
+- [Configuration Guide](guides/06_configuration.md) - Message size limits and server config
+- [LangGraph Integration Guide](guides/07_langgraph_integration.md) - Integrating with LangGraph
+
+## Message Size Limits and Configuration
+
+### Default Limits
+
+The A2A SDK itself **does not impose hard limits** on message sizes, but practical limits exist:
+
+#### FileWithBytes (Base64 Encoded)
+- **Recommended**: < 10 MB
+- **Typical Maximum**: 10-100 MB (depends on HTTP server configuration)
+- **Note**: Base64 encoding increases size by ~33%
+
+#### FileWithUri (URL Reference)
+- **Protocol Limit**: None (file stays at source)
+- **Best for**: Large files, videos, datasets
+- **Agent responsibility**: Download and process the file from the URI
+
+### Configuring Server Limits
+
+#### Uvicorn Configuration
+
 ```python
-from app.core.tree_validator import TreeValidator
+import uvicorn
 
-validator = TreeValidator()
-is_valid, unreachable, incomplete = validator.validate_tree(tree)
-paths = validator.get_all_paths(tree)
+uvicorn.run(
+    app,
+    host="0.0.0.0",
+    port=8000,
+    limit_max_requests=1000,
+    timeout_keep_alive=5,
+    # Note: Uvicorn doesn't have a direct max request size parameter
+    # It's typically limited by the underlying HTTP implementation
+)
 ```
 
-### Visualization
-```python
-from app.streamlit_app.components import render_tile_tree_view
-
-render_tile_tree_view(tree_data)
-```
-
-## Project Structure
-
-```
-policy-processor/
-├── app/
-│   ├── core/
-│   │   ├── decision_tree_generator.py    # Tree generation with routing
-│   │   ├── tree_validator.py              # Path validation
-│   │   ├── tree_generation_prompts.py     # Enhanced LLM prompts
-│   │   ├── semantic_chunker.py            # Smart chunking (planned)
-│   │   ├── graph_nodes.py                 # LangGraph nodes
-│   │   ├── langgraph_orchestrator.py      # Main workflow
-│   │   └── ...
-│   ├── models/
-│   │   └── schemas.py                      # Enhanced models with routing
-│   ├── streamlit_app/
-│   │   ├── app.py                         # Main UI
-│   │   └── components/
-│   │       └── tree_visualizer.py         # Tile-based visualization
-│   ├── a2a/
-│   │   ├── agent.py                       # A2A agent
-│   │   └── server.py                      # A2A server
-│   └── database/
-│       ├── models.py                      # SQLAlchemy models
-│       └── operations.py                  # Database operations
-├── docs/
-│   ├── IMPROVEMENT_PLAN.md                # Roadmap
-│   ├── IMPLEMENTATION_SUMMARY.md          # Current changes
-│   ├── ARCHITECTURE.md                    # System design
-│   └── QUICKSTART.md                      # Quick start
-├── requirements.txt
-├── main_a2a.py
-└── README.md
-```
-
-## Enhanced Features
-
-### Conditional Routing
-All decision trees now include explicit routing logic:
-- Each question specifies next node for every possible answer
-- Support for complex conditions (AND/OR)
-- Validation ensures all paths lead to outcomes
-- No dead-end paths
-
-### Path Validation
-Automatic validation of tree structure:
-- Checks for unreachable nodes
-- Identifies incomplete routing
-- Validates logic group consistency
-- Reports path coverage statistics
-
-### Semantic Chunking (Planned)
-Intelligent document segmentation:
-- Policy-aware boundary detection
-- Preserves complete sections
-- Maintains cross-references
-- Adaptive chunk sizing
-
-## Performance
-
-### Benchmarks
-- PDF parsing: 2-5 seconds
-- Policy extraction: 10-30 seconds
-- Tree generation: 5-15 seconds per tree
-- Validation: <1 second per tree
-
-### Optimization
-- Parallel tree generation (up to 5 concurrent)
-- Semantic chunking for better quality
-- Confidence-based retry logic
-- Redis caching for job state
-
-## Troubleshooting
-
-### Common Issues
-
-**Trees show 0 questions**
-- Solution: Check debug logs for parsing errors
-- Verify tree structure with validator
-- Ensure question extraction completed
-
-**Incomplete routing warnings**
-- Solution: Edit tree in Review tab
-- Add missing answer paths
-- Validate all outcomes are reachable
-
-**High processing time**
-- Solution: Use GPT-4o-mini for simple policies
-- Enable semantic chunking
-- Reduce chunk overlap
-
-## Development
-
-### Adding Custom Node Types
-1. Update `NodeType` enum in schemas.py
-2. Add handling in tree generator
-3. Update visualization component
-4. Add validation rules
-
-### Extending Visualization
-1. Modify `TileTreeVisualizer` class
-2. Add custom render methods
-3. Update styling in component
-4. Test with real trees
-
-## Testing
+#### Gunicorn Configuration
 
 ```bash
-# Run all tests
-pytest
-
-# Test tree validation
-pytest tests/test_tree_validator.py
-
-# Test tree generation
-pytest tests/test_decision_tree_generator.py
-
-# Integration tests
-pytest tests/test_integration.py
+gunicorn app:app -k uvicorn.workers.UvicornWorker \
+  --limit-request-line 8190 \
+  --limit-request-fields 100 \
+  --limit-request-field_size 8190 \
+  --timeout 120
 ```
 
-## Documentation
+#### FastAPI/Starlette Configuration
 
-- **Quick Start**: `docs/QUICKSTART.md`
-- **Architecture**: `docs/ARCHITECTURE.md`
-- **Improvements**: `docs/IMPROVEMENT_PLAN.md`
-- **Testing**: `docs/TESTING_GUIDE.md`
+```python
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+
+app = FastAPI()
+
+# Add middleware to handle large requests
+@app.middleware("http")
+async def check_request_size(request: Request, call_next):
+    # Check content length
+    content_length = request.headers.get("content-length")
+    if content_length:
+        length = int(content_length)
+        max_size = 100 * 1024 * 1024  # 100 MB
+        if length > max_size:
+            return JSONResponse(
+                status_code=413,
+                content={"detail": "Request too large"}
+            )
+    return await call_next(request)
+```
+
+### Best Practices
+
+1. **For files < 10MB**: Use FileWithBytes
+2. **For files > 10MB**: Use FileWithUri
+3. **Compress before encoding**: Reduces base64 size
+4. **Use streaming**: For large responses
+5. **Chunk artifacts**: Split large outputs into multiple artifacts
+
+## File Attachments
+
+The A2A protocol supports file attachments through the **FilePart** type:
+
+### FileWithBytes (Embedded Files)
+
+```python
+import base64
+
+# Read file
+with open("document.txt", "rb") as f:
+    file_bytes = f.read()
+
+# Create FilePart
+file_part = types.FilePart(
+    file=types.FileWithBytes(
+        bytes=base64.b64encode(file_bytes).decode(),
+        name="document.txt",
+        mime_type="text/plain"
+    ),
+    metadata={"category": "document"}
+)
+
+# Add to message
+message = types.Message(
+    message_id="msg_1",
+    role=types.Role.USER,
+    parts=[types.Part(root=file_part)]
+)
+```
+
+### FileWithUri (Referenced Files)
+
+```python
+file_part = types.FilePart(
+    file=types.FileWithUri(
+        uri="https://example.com/large-file.pdf",
+        name="large-file.pdf",
+        mime_type="application/pdf"
+    )
+)
+```
+
+### When to Use Each
+
+| FileWithBytes | FileWithUri |
+|---------------|-------------|
+| Small files (< 10MB) | Large files (> 10MB) |
+| Files need to be embedded | Files hosted elsewhere |
+| Transient files | Persistent files |
+| High security needs | Lower latency |
+
+## Streaming vs Non-Streaming
+
+### Streaming
+
+**Advantages**:
+- Real-time updates
+- Better user experience for long operations
+- Progressive content generation
+- Lower perceived latency
+
+**Server Implementation**:
+```python
+class StreamingAgent(AgentExecutor):
+    async def execute(self, request_context):
+        # Yield multiple updates
+        for i, chunk in enumerate(generate_chunks()):
+            yield types.Message(
+                message_id=f"msg_{i}",
+                role=types.Role.AGENT,
+                parts=[types.Part(root=types.TextPart(text=chunk))]
+            )
+```
+
+**Client Usage**:
+```python
+client = Client.create(
+    card=agent_card,
+    config=ClientConfig(prefer_streaming=True),
+    transport=transport
+)
+
+async for event in client.send_message(message):
+    # Process events as they arrive
+    handle_event(event)
+```
+
+### Non-Streaming (Polling)
+
+**Advantages**:
+- Simpler implementation
+- Better for short operations
+- Easier error handling
+- Lower server resources
+
+**Server Implementation**:
+```python
+class NonStreamingAgent(AgentExecutor):
+    async def execute(self, request_context):
+        # Process completely, then yield final result
+        result = await process_request(request_context)
+
+        yield types.Message(
+            message_id="msg_1",
+            role=types.Role.AGENT,
+            parts=[types.Part(root=types.TextPart(text=result))]
+        )
+
+        yield types.TaskStatusUpdateEvent(
+            task_id=request_context.task_id,
+            context_id=request_context.context_id,
+            status=types.TaskStatus(state=types.TaskState.COMPLETED),
+            final=True
+        )
+```
+
+**Client Usage**:
+```python
+client = Client.create(
+    card=agent_card,
+    config=ClientConfig(
+        prefer_streaming=False,
+        poll_interval_seconds=1.0,
+        max_poll_attempts=60
+    ),
+    transport=transport
+)
+```
+
+### Agent Card Configuration
+
+```python
+agent_card = types.AgentCard(
+    name="My Agent",
+    capabilities=types.AgentCapabilities(
+        streaming=True,  # Indicates streaming support
+        push_notifications=False
+    ),
+    # ... other fields
+)
+```
+
+## LangGraph Integration
+
+LangGraph can be integrated with A2A to create sophisticated, stateful agents:
+
+### Key Integration Points
+
+1. **Context ID → Thread ID**: A2A's context_id maps to LangGraph's thread_id for conversation history
+2. **Agent Executor**: Wraps LangGraph agent as an A2A-compliant executor
+3. **Tool Usage**: LangGraph tools work seamlessly with A2A messages
+4. **Memory**: LangGraph's checkpointer maintains conversation state
+
+### Example Integration
+
+```python
+from langgraph.prebuilt import create_react_agent
+from langgraph.checkpoint.memory import MemorySaver
+
+class LangGraphAgent(AgentExecutor):
+    def __init__(self):
+        self.tools = [your_tools]
+        self.memory = MemorySaver()
+        self.graph = create_react_agent(
+            model=your_llm,
+            tools=self.tools,
+            checkpointer=self.memory
+        )
+
+    async def execute(self, request_context):
+        # Extract user input
+        user_text = extract_text(request_context.user_message)
+
+        # Configure with context ID
+        config = {"configurable": {"thread_id": request_context.context_id}}
+
+        # Invoke LangGraph
+        result = await asyncio.to_thread(
+            self.graph.invoke,
+            {"messages": [("user", user_text)]},
+            config
+        )
+
+        # Convert to A2A response
+        yield convert_to_a2a_message(result)
+```
+
+See [examples/07_langgraph_agent_server.py](examples/07_langgraph_agent_server.py) for a complete implementation.
+
+## Resources
+
+### Official Documentation
+- [A2A Protocol Specification](https://google.github.io/A2A/)
+- [A2A Python SDK (PyPI)](https://pypi.org/project/a2a-sdk/)
+- [A2A GitHub Repository](https://github.com/a2aproject/a2a-python)
+
+### Related Projects
+- [LangGraph Documentation](https://python.langchain.com/docs/langgraph)
+- [FastAPI Documentation](https://fastapi.tiangolo.com/)
+- [Pydantic Documentation](https://docs.pydantic.dev/)
+
+### Community & Support
+- [A2A Discussion Forum](https://github.com/a2aproject/a2a-python/discussions)
+- [Issue Tracker](https://github.com/a2aproject/a2a-python/issues)
+
+### Tutorials & Blogs
+- [Building an A2A Currency Agent with LangGraph](https://a2aprotocol.ai/blog/a2a-langraph-tutorial-20250513)
+- [Google A2A Python SDK Tutorial](https://a2aprotocol.ai/blog/google-a2a-python-sdk-tutorial)
+- [Getting Started with Google A2A](https://medium.com/google-cloud/getting-started-with-google-a2a-a-hands-on-tutorial-for-the-agent2agent-protocol-3d3b5e055127)
 
 ## Contributing
 
-1. Fork repository
-2. Create feature branch
-3. Implement with tests
-4. Update documentation
-5. Submit pull request
+This repository is a research and educational resource. Feel free to:
+- Submit issues for clarifications
+- Propose improvements to examples
+- Share your own A2A implementations
+- Add new guides or tutorials
 
 ## License
 
-MIT License
+The examples and documentation in this repository are provided for educational purposes. The A2A SDK itself is licensed by its respective maintainers.
 
-## Support
+## Acknowledgments
 
-- Issues: GitHub Issues
-- Documentation: `docs/` directory
-- Quick Start: `docs/QUICKSTART.md`
+- Google and the A2A Project team for developing the protocol and SDK
+- LangChain team for LangGraph integration
+- The open-source community for feedback and contributions
+
+---
+
+**Last Updated**: December 2025
+**A2A SDK Version**: 0.3.20
+**Python Version**: 3.11+

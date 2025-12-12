@@ -1,13 +1,20 @@
 {
   "permissions": {
     "allow": [
-      "Bash(dir /b .env*)",
-      "Bash(dir:*)",
-      "Bash(move:*)",
-      "Bash(redis-cli:*)",
-      "Bash(python -c:*)"
-    ],
-    "deny": [],
-    "ask": []
+      "Bash(pip install:*)",
+      "Bash(.venvScriptspython.exe explore_a2a_structure.py)",
+      "Bash(.venv/Scripts/python.exe explore_a2a_structure.py)",
+      "Bash(.venv/Scripts/pip.exe install:*)",
+      "Bash(.venv/Scripts/python.exe:*)",
+      "Bash(../.venv/Scripts/pip.exe install:*)",
+      "Bash(\"c:\\Users\\shiva\\OneDrive\\Desktop\\a2a exploration\\.venv\\Scripts\\pip.exe\" install:*)",
+      "Bash(.venvScriptspython.exe -c \"from utils.llm import get_llm_client; print(''LLM module imports successfully'')\")",
+      "Bash(\"..\\.venv\\Scripts\\python.exe\" -c \"from utils.llm import get_llm_client; print(''LLM module imports successfully'')\")",
+      "Bash(\"../../.venv/Scripts/python.exe\":*)",
+      "Bash(test:*)",
+      "Bash(python fix_agent_imports.py:*)",
+      "Bash(python fix_client_imports.py:*)",
+      "Bash(python:*)"
+    ]
   }
 }

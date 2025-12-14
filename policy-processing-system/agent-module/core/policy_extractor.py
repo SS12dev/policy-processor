@@ -1094,15 +1094,21 @@ Remember: QUALITY over QUANTITY. Extract 3-5 well-structured policies, NOT 15 fr
         logger.debug("Step 6: Refining hierarchy with semantic analysis...")
         root_policies, policies = self._refine_policy_hierarchy(root_policies, policies, policy_map)
         
-        # Step 7: Fix levels and ensure consistency
-        logger.debug("Step 7: Fixing policy levels and ensuring consistency...")
+        # Step 7: Fix orphaned policies (policies with parent_id but parent doesn't exist)
+        logger.debug("Step 7: Fixing orphaned policies...")
+        orphaned_fixed = self._fix_orphaned_policies(policies, policy_map, root_policies)
+        if orphaned_fixed > 0:
+            logger.info(f"Fixed {orphaned_fixed} orphaned policies by promoting them to root policies")
+
+        # Step 8: Fix levels and ensure consistency
+        logger.debug("Step 8: Fixing policy levels and ensuring consistency...")
         self._fix_policy_levels(policies)
-        
-        # Recalculate child count after refinement
+
+        # Recalculate child count after fixing orphans
         child_count = sum(1 for p in policies if p.parent_id)
         logger.info(f"Hierarchy structure (post-refinement) - Root policies: {len(root_policies)}, Child policies: {child_count}")
-        
-        # Step 8: Log detailed hierarchy structure
+
+        # Step 9: Log detailed hierarchy structure
         self._log_hierarchy_structure(root_policies, policies)
 
         # Calculate max depth
@@ -1396,7 +1402,148 @@ Remember: QUALITY over QUANTITY. Extract 3-5 well-structured policies, NOT 15 fr
         keywords = [w for w in words if len(w) > 3 and w not in stop_words]
         
         return keywords
-    
+
+    def _fix_orphaned_policies(
+        self,
+        policies: List[SubPolicy],
+        policy_map: Dict[str, SubPolicy],
+        root_policies: List[SubPolicy]
+    ) -> int:
+        """
+        Fix orphaned policies (policies with parent_id but parent doesn't exist).
+
+        This happens when:
+        1. Policies are merged/deduplicated and their IDs change
+        2. Parent policies are deleted during merging
+        3. Semantic refinement creates parent_id references that don't exist
+
+        Solution: Try to find an alternative parent, or promote to root as last resort.
+
+        Args:
+            policies: List of all policies
+            policy_map: Dictionary mapping policy IDs to policies
+            root_policies: List of root policies (will be modified)
+
+        Returns:
+            Number of orphaned policies fixed
+        """
+        orphaned_count = 0
+
+        for policy in policies:
+            # Check if policy has a parent_id but parent doesn't exist
+            if policy.parent_id and policy.parent_id not in policy_map:
+                logger.warning(
+                    f"Orphaned policy detected: '{policy.policy_id}' ({policy.title}) "
+                    f"has parent_id='{policy.parent_id}' but parent not found."
+                )
+
+                # Try to find an alternative parent based on semantic similarity
+                alternative_parent = self._find_alternative_parent(policy, list(policy_map.values()))
+
+                if alternative_parent:
+                    logger.info(
+                        f"Found alternative parent for '{policy.policy_id}': "
+                        f"'{alternative_parent.policy_id}' ({alternative_parent.title})"
+                    )
+                    policy.parent_id = alternative_parent.policy_id
+                    policy.level = alternative_parent.level + 1
+
+                    # Add to parent's children
+                    if policy not in alternative_parent.children:
+                        alternative_parent.children.append(policy)
+                else:
+                    # No alternative found, promote to root
+                    logger.warning(
+                        f"No alternative parent found for '{policy.policy_id}'. "
+                        f"Promoting to root policy."
+                    )
+                    policy.parent_id = None
+                    policy.level = 0
+
+                    # Add to root policies if not already there
+                    if policy not in root_policies:
+                        root_policies.append(policy)
+
+                orphaned_count += 1
+
+        return orphaned_count
+
+    def _find_alternative_parent(
+        self,
+        orphan: SubPolicy,
+        all_policies: List[SubPolicy]
+    ) -> Optional[SubPolicy]:
+        """
+        Find an alternative parent for an orphaned policy using semantic matching.
+
+        Args:
+            orphan: Orphaned policy needing a parent
+            all_policies: All available policies
+
+        Returns:
+            Best matching parent policy or None
+        """
+        # Only consider policies that could be parents (not already children)
+        parent_candidates = [
+            p for p in all_policies
+            if p.policy_id != orphan.policy_id and not p.parent_id
+        ]
+
+        if not parent_candidates:
+            return None
+
+        # Score each candidate based on similarity
+        scored_candidates = []
+
+        for candidate in parent_candidates:
+            score = 0
+            reasons = []
+
+            # Factor 1: Keyword overlap in titles
+            orphan_keywords = set(self._extract_keywords(orphan.title))
+            candidate_keywords = set(self._extract_keywords(candidate.title))
+            keyword_overlap = len(orphan_keywords & candidate_keywords)
+            if keyword_overlap > 0:
+                score += keyword_overlap * 2
+                reasons.append(f"keyword_overlap={keyword_overlap}")
+
+            # Factor 2: Check if candidate is umbrella policy
+            candidate_title_lower = candidate.title.lower()
+            if any(kw in candidate_title_lower for kw in ['criteria', 'eligibility', 'requirements', 'medically necessary']):
+                score += 3
+                reasons.append("umbrella_policy")
+
+            # Factor 3: Candidate has more conditions (more comprehensive)
+            if len(candidate.conditions) > len(orphan.conditions):
+                score += 1
+                reasons.append("more_comprehensive")
+
+            # Factor 4: Page proximity
+            if hasattr(orphan, 'source_references') and hasattr(candidate, 'source_references'):
+                if orphan.source_references and candidate.source_references:
+                    orphan_page = orphan.source_references[0].page_number
+                    candidate_page = candidate.source_references[0].page_number
+                    if abs(orphan_page - candidate_page) <= 2:
+                        score += 1
+                        reasons.append("page_proximity")
+
+            if score > 0:
+                scored_candidates.append((candidate, score, reasons))
+
+        # Return best candidate (score >= 3)
+        if scored_candidates:
+            scored_candidates.sort(key=lambda x: x[1], reverse=True)
+            best_candidate, best_score, reasons = scored_candidates[0]
+
+            if best_score >= 3:
+                logger.debug(
+                    f"Alternative parent match: '{best_candidate.policy_id}' "
+                    f"(score={best_score}, reasons={reasons})"
+                )
+                return best_candidate
+
+        return None
+
     def _fix_policy_levels(self, policies: List[SubPolicy]) -> None:
         """
         Fix policy level assignments to ensure consistency.

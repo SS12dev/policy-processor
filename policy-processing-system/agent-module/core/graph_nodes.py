@@ -852,6 +852,8 @@ async def complete_node(state: ProcessingState) -> ProcessingState:
         # Verify required fields are present
         if not all([chunk_summary, policy_hierarchy, decision_trees, validation_result]):
             logger.warning(f"[{job_id}] Missing required fields for stats, skipping")
+            # Set empty processing_stats to avoid validation error
+            state["processing_stats"] = {}
             return state
 
         processing_stats = {

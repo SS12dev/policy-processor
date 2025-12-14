@@ -5,6 +5,10 @@ FastAPI-based A2A server with streaming support and settings integration.
 """
 
 from uuid import uuid4
+from datetime import datetime
+
+from fastapi.responses import JSONResponse
+import redis
 
 from a2a.server.apps import A2AFastAPIApplication
 from a2a.server.request_handlers import DefaultRequestHandler
@@ -14,9 +18,21 @@ from a2a import types
 
 from settings import settings
 from utils.logger import get_logger
+from utils.redis_storage import RedisAgentStorage
 from agent import get_agent
 
 logger = get_logger(__name__)
+
+# Initialize Redis storage for health checks
+_redis_storage = None
+
+
+def get_redis_storage() -> RedisAgentStorage:
+    """Get or create Redis storage instance for health checks."""
+    global _redis_storage
+    if _redis_storage is None:
+        _redis_storage = RedisAgentStorage()
+    return _redis_storage
 
 
 def create_agent_card() -> types.AgentCard:
@@ -151,30 +167,100 @@ def create_server():
         agent_card = create_agent_card()
 
         # Create the A2A FastAPI application
+        # Increase max_content_length to handle large PDFs (default 10MB → 50MB)
+        # Base64 encoding increases size by ~33%, so 50MB allows ~37MB PDFs
         a2a_app = A2AFastAPIApplication(
             agent_card=agent_card,
-            http_handler=http_handler
+            http_handler=http_handler,
+            max_content_length=50 * 1024 * 1024  # 50MB limit
         )
 
         # Build the FastAPI app (uses default endpoints)
         app = a2a_app.build()
 
-        # Add health check endpoint
+        # Add health check endpoints for production deployment
+
         @app.get("/health")
         async def health_check():
-            """Health check endpoint for monitoring."""
+            """
+            Simple health check endpoint (always returns 200 if server is running).
+            Use this for basic monitoring.
+            """
+            return {"status": "ok"}
+
+        @app.get("/health/live")
+        async def liveness_check():
+            """
+            Kubernetes liveness probe - checks if server is alive.
+            Fast check, always succeeds if server is responsive.
+            """
             return {
-                "status": "healthy",
+                "status": "alive",
                 "agent": settings.agent_name,
                 "version": settings.agent_version,
-                "redis": "connected"
+                "timestamp": datetime.utcnow().isoformat()
             }
+
+        @app.get("/health/ready")
+        async def readiness_check():
+            """
+            Kubernetes readiness probe - checks if server can handle requests.
+            Verifies dependencies (Redis) with timeout protection.
+            Returns 503 if not ready.
+            """
+            redis_ok = False
+            active_jobs = -1
+
+            try:
+                # Non-blocking Redis ping with 2-second timeout
+                redis_client = redis.Redis(
+                    host=settings.redis_host,
+                    port=settings.redis_port,
+                    db=settings.redis_db,
+                    password=settings.redis_password,
+                    socket_timeout=2,
+                    socket_connect_timeout=2
+                )
+                redis_client.ping()
+                redis_ok = True
+                logger.debug("Redis health check: OK")
+            except Exception as e:
+                logger.warning(f"Redis health check failed: {e}")
+                redis_ok = False
+
+            # Get active jobs count (non-blocking)
+            if redis_ok:
+                try:
+                    storage = get_redis_storage()
+                    active_jobs = storage.get_active_jobs_count()
+                except Exception as e:
+                    logger.warning(f"Failed to get active jobs count: {e}")
+                    active_jobs = -1
+
+            # Determine readiness
+            is_ready = redis_ok and active_jobs >= 0
+            status_code = 200 if is_ready else 503
+
+            return JSONResponse(
+                status_code=status_code,
+                content={
+                    "status": "ready" if is_ready else "not_ready",
+                    "agent": settings.agent_name,
+                    "version": settings.agent_version,
+                    "redis": "connected" if redis_ok else "disconnected",
+                    "active_jobs": active_jobs if active_jobs >= 0 else None,
+                    "max_concurrent_jobs": 10,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+            )
 
         logger.info(f"A2A server created successfully")
         logger.info(f"   - Server URL: http://{settings.server_host}:{settings.server_port}")
         logger.info(f"   - Agent card: http://{settings.server_host}:{settings.server_port}/.well-known/agent-card.json")
         logger.info(f"   - RPC endpoint: http://{settings.server_host}:{settings.server_port}/")
         logger.info(f"   - Health check: http://{settings.server_host}:{settings.server_port}/health")
+        logger.info(f"   - Liveness probe: http://{settings.server_host}:{settings.server_port}/health/live")
+        logger.info(f"   - Readiness probe: http://{settings.server_host}:{settings.server_port}/health/ready")
         logger.info(f"   - Skills: {len(agent_card.skills)} available")
         logger.info(f"   - Redis TTL: {settings.redis_result_ttl_hours}h")
 
@@ -191,6 +277,21 @@ app = create_server()
 
 if __name__ == "__main__":
     import uvicorn
+    import asyncio
+    import sys
+
+    # Suppress harmless Windows asyncio connection cleanup errors
+    # This is a known issue on Windows when SSE connections are closed
+    if sys.platform == 'win32':
+        def handle_exception(loop, context):
+            exception = context.get("exception")
+            # Suppress ConnectionResetError during cleanup (harmless)
+            if isinstance(exception, ConnectionResetError):
+                return
+            # Log all other exceptions normally
+            loop.default_exception_handler(context)
+
+        asyncio.get_event_loop().set_exception_handler(handle_exception)
 
     logger.info("=" * 80)
     logger.info(f"Starting {settings.agent_name}")

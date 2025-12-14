@@ -22,3 +22,8 @@ httpx>=0.26.0
 
 # ===== Utilities =====
 typing-extensions>=4.9.0
+
+# ===== PDF Server Dependencies =====
+flask>=3.0.0
+flask-cors>=4.0.0
+requests>=2.31.0

@@ -14,7 +14,20 @@
       "Bash(test:*)",
       "Bash(python fix_agent_imports.py:*)",
       "Bash(python fix_client_imports.py:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(sqlite3:*)",
+      "Bash(...venvScriptspython.exe -c \"from a2a.sdk.application import A2AFastAPIApplication; import inspect; print(inspect.signature(A2AFastAPIApplication.__init__))\")",
+      "Bash(\"../.venv/Scripts/python.exe\" -c \"from a2a.sdk.application import A2AFastAPIApplication; import inspect; print(inspect.signature(A2AFastAPIApplication.__init__))\")",
+      "Bash(powershell -Command \"Start-Process ''https://digi.bib.uni-mannheim.de/tesseract/tesseract-ocr-w64-setup-5.3.3.20231005.exe''\")",
+      "Bash(ls:*)",
+      "Bash(tesseract:*)",
+      "Bash(powershell:*)",
+      "Bash(du:*)",
+      "Bash(dir:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(wc:*)",
+      "Bash(tree:*)"
     ]
   }
 }

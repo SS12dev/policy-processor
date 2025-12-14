@@ -417,15 +417,41 @@ def get_agent() -> PolicyProcessorAgent:
     global _agent
     if _agent is None:
         from settings import settings
-        
+        from utils.poppler_installer import ensure_poppler_available
+        from utils.tesseract_installer import ensure_tesseract_available
+
+        # Ensure Poppler is available (auto-install if needed)
+        logger.info("Checking Poppler installation...")
+        poppler_ok = ensure_poppler_available(auto_install=True)
+        if poppler_ok:
+            logger.info("Poppler is ready for PDF to image conversion")
+        else:
+            logger.warning("Poppler not available - OCR functionality will be limited")
+
+        # Ensure Tesseract is available (auto-install if needed)
+        logger.info("Checking Tesseract OCR installation...")
+        tesseract_ok = ensure_tesseract_available(auto_install=True)
+        if tesseract_ok:
+            logger.info("Tesseract OCR is ready for text extraction from images")
+        else:
+            logger.warning("Tesseract OCR not available - text extraction from scanned pages will fail")
+            logger.warning("Install with: choco install tesseract (or see logs for installation instructions)")
+
+        if poppler_ok and tesseract_ok:
+            logger.info("✅ Full OCR pipeline ready (Poppler + Tesseract)")
+        elif poppler_ok:
+            logger.warning("⚠️  Partial OCR: Poppler OK, but Tesseract missing")
+        else:
+            logger.warning("⚠️  OCR unavailable: Install Poppler and Tesseract for full functionality")
+
         # Initialize Redis storage
         redis_storage = RedisAgentStorage(result_ttl_hours=settings.redis_result_ttl_hours)
-        
+
         # Initialize LangGraph orchestrator
         orchestrator = LangGraphOrchestrator()
-        
+
         # Create agent
         _agent = PolicyProcessorAgent(orchestrator, redis_storage)
         logger.info("Global PolicyProcessorAgent instance created")
-    
+
     return _agent

@@ -10,9 +10,15 @@ import streamlit as st
 import asyncio
 import json
 import base64
+import time
+import re
 import warnings
 from pathlib import Path
 from datetime import datetime
+import threading
+import subprocess
+import sys
+import requests
 
 # Suppress async generator closing warnings from httpx/a2a during cleanup
 warnings.filterwarnings("ignore", message=".*asynchronous generator is already running.*")
@@ -30,6 +36,61 @@ from components.tree_renderers import (
 
 logger = get_logger(__name__)
 
+# PDF Server management
+PDF_SERVER_PORT = 8502
+PDF_SERVER_URL = f"http://localhost:{PDF_SERVER_PORT}"
+
+def check_pdf_server_running():
+    """Check if PDF server is already running."""
+    try:
+        response = requests.get(f"{PDF_SERVER_URL}/health", timeout=2)
+        return response.status_code == 200
+    except:
+        return False
+
+def start_pdf_server_background():
+    """Start PDF server in background thread if not already running."""
+    if not check_pdf_server_running():
+        try:
+            # Start PDF server in subprocess
+            pdf_server_path = Path(__file__).parent / "pdf_server.py"
+
+            # Platform-specific subprocess configuration
+            # Windows: Use CREATE_NO_WINDOW to hide console completely
+            # Linux: Use start_new_session to detach from parent
+            if sys.platform == 'win32':
+                # Windows: Hide console window completely
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
+
+                process = subprocess.Popen(
+                    [sys.executable, str(pdf_server_path)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    startupinfo=startupinfo,
+                    creationflags=subprocess.CREATE_NO_WINDOW
+                )
+            else:
+                # Linux/Unix: Standard background process
+                process = subprocess.Popen(
+                    [sys.executable, str(pdf_server_path)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True  # Detach from parent process
+                )
+
+            logger.info("Started PDF server in background (hidden)")
+            # Give it a moment to start
+            time.sleep(2)
+        except Exception as e:
+            logger.error(f"Failed to start PDF server: {e}")
+
+# Initialize PDF server on first run
+if "pdf_server_initialized" not in st.session_state:
+    start_pdf_server_background()
+    st.session_state.pdf_server_initialized = True
+
 # Page configuration
 st.set_page_config(
     page_title="Policy Document Processor",
@@ -37,6 +98,21 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+
+# Helper function to run async code in Streamlit
+def run_async(coro):
+    """Run async coroutine in Streamlit context."""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
 
 # Initialize database operations
 @st.cache_resource
@@ -63,28 +139,65 @@ st.markdown("---")
 with st.sidebar:
     st.header("Status")
 
-    # Check server health on button click (document-analysis-system pattern)
-    if st.button("🔍 Check Server Health", use_container_width=True):
-        import httpx
+    # Auto-polling health indicator with real-time status
+    st.markdown("#### 🔌 Agent Server Status")
+
+    # Initialize session state for health status
+    if "health_status" not in st.session_state:
+        st.session_state.health_status = {"status": "checking", "available": False}
+    if "last_health_check" not in st.session_state:
+        st.session_state.last_health_check = 0
+
+    # Auto-refresh every 30 seconds
+    current_time = time.time()
+    if current_time - st.session_state.last_health_check > 30:
+        # Perform health check
         try:
-            response = httpx.get(
-                "http://localhost:8001/health",
-                timeout=5.0
-            )
-            if response.status_code == 200:
-                data = response.json()
-                st.success(f"✅ Server Online")
-                with st.expander("Server Info"):
-                    st.json(data)
-            else:
-                st.error(f"❌ Server Error: {response.status_code}")
+            client = get_client()
+            health_result = run_async(client.check_health())
+            st.session_state.health_status = health_result
+            st.session_state.last_health_check = current_time
         except Exception as e:
-            st.error(f"❌ Server Offline: {str(e)}")
+            st.session_state.health_status = {
+                "status": "error",
+                "available": False,
+                "error": str(e)
+            }
+
+    # Display status with colored indicator
+    health = st.session_state.health_status
+    if health.get("available"):
+        active_jobs = health.get("active_jobs", 0)
+        st.success(f"🟢 **Online** ({active_jobs} jobs active)")
+        if health.get("redis") == "connected":
+            st.caption("✓ Redis connected")
+    elif health.get("status") == "checking":
+        st.info("🟡 **Checking...**")
+    elif health.get("status") == "timeout":
+        st.warning("🟡 **Timeout** - Server not responding")
+    else:
+        st.error("🔴 **Offline**")
+        if "error" in health:
+            error_msg = str(health['error'])
+            st.caption(f"Error: {error_msg[:50]}...")
+
+    # Manual refresh button
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🔄 Refresh", use_container_width=True):
+            st.session_state.last_health_check = 0  # Force immediate check
+            st.rerun()
+
+    # Show last check time
+    time_since_check = int(current_time - st.session_state.last_health_check)
+    st.caption(f"Last checked: {time_since_check}s ago")
+
+    st.markdown("---")
 
     # Total policies count
     total_jobs = db_ops.count_jobs(status="completed")
     st.metric("Total Policies", total_jobs)
-    
+
     # View all button
     if st.button("View All Policies", use_container_width=True):
         st.session_state.active_tab = 1
@@ -1423,25 +1536,41 @@ async def process_policy_document(
 ):
     """Process policy document asynchronously."""
     client = get_client()
-    
-    # Progress indicators
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
+
+    # Create UI components for progress tracking with timer
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+    with col2:
+        timer_display = st.empty()
+        stage_display = st.empty()
+
+    # Track processing start time and stages
+    start_time = time.time()
+    current_stage = "Initializing"
+    stage_times = {}
+
     try:
         # Connect to agent
         status_text.text("Connecting to agent...")
+        elapsed = time.time() - start_time
+        timer_display.metric("⏱️ Elapsed", f"0:00")
         await client.connect()
         progress_bar.progress(10)
-        
+
         # Send document
         status_text.text("Sending document...")
+        elapsed = time.time() - start_time
+        minutes = int(elapsed // 60)
+        seconds = int(elapsed % 60)
+        timer_display.metric("⏱️ Elapsed", f"{minutes}:{seconds:02d}")
         progress_bar.progress(20)
-        
+
         # Process events
         task_id = None
         final_results = None
-        
+
         async for event in client.process_document(
             pdf_bytes,
             filename,
@@ -1449,35 +1578,65 @@ async def process_policy_document(
             enable_streaming,
             confidence_threshold
         ):
+            # Update elapsed time
+            elapsed = time.time() - start_time
+            minutes = int(elapsed // 60)
+            seconds = int(elapsed % 60)
+            timer_display.metric("⏱️ Elapsed", f"{minutes}:{seconds:02d}")
+
             event_type = event.get("type")
-            
+
             if event_type == "status":
                 status_msg = event.get("message", "Processing...")
                 status_text.text(f"📄 {status_msg}")
-                
-                # Update progress based on status
-                if "parsing" in status_msg.lower():
-                    progress_bar.progress(30)
-                elif "extracting" in status_msg.lower():
-                    progress_bar.progress(50)
-                elif "analyzing" in status_msg.lower():
-                    progress_bar.progress(70)
-                elif "validating" in status_msg.lower():
-                    progress_bar.progress(85)
-                elif "formatting" in status_msg.lower():
-                    progress_bar.progress(95)
-            
+
+                # Try to extract stage information from message
+                stage_match = re.search(r"Stage (\d+)/(\d+)", status_msg)
+                if stage_match:
+                    stage_num, total_stages = stage_match.groups()
+                    stage_display.caption(f"Stage {stage_num}/{total_stages}")
+
+                    # Update progress based on stage
+                    progress = (int(stage_num) / int(total_stages)) * 100
+                    progress_bar.progress(int(progress))
+
+                    # Extract stage name
+                    stage_name_match = re.search(r"Stage \d+/\d+: (.+)", status_msg)
+                    if stage_name_match:
+                        stage_name = stage_name_match.group(1)
+                        if current_stage != stage_name:
+                            stage_times[current_stage] = elapsed
+                            current_stage = stage_name
+                else:
+                    # Fallback: Update progress based on keywords
+                    if "parsing" in status_msg.lower():
+                        progress_bar.progress(30)
+                        stage_display.caption("Parsing document")
+                    elif "extracting" in status_msg.lower():
+                        progress_bar.progress(50)
+                        stage_display.caption("Extracting policies")
+                    elif "analyzing" in status_msg.lower():
+                        progress_bar.progress(70)
+                        stage_display.caption("Analyzing structure")
+                    elif "validating" in status_msg.lower():
+                        progress_bar.progress(85)
+                        stage_display.caption("Validating results")
+                    elif "formatting" in status_msg.lower():
+                        progress_bar.progress(95)
+                        stage_display.caption("Formatting output")
+
             elif event_type == "artifact":
                 task_id = event.get("task_id")
                 final_results = event.get("data")
-            
+
             elif event_type == "complete":
                 task_id = event.get("job_id")
                 final_results = event.get("results")
                 progress_bar.progress(100)
                 status_text.text("✅ Processing complete!")
+                stage_times[current_stage] = elapsed
                 break
-            
+
             elif event_type == "error":
                 status_text.error(f"❌ Error: {event.get('message')}")
                 progress_bar.progress(100)
@@ -1502,15 +1661,17 @@ async def process_policy_document(
             )
             
             if saved_result.get("saved_to_database"):
-                st.success(f"✅ Policy '{policy_name}' processed and saved successfully!")
-                
+                # Calculate total processing time
+                total_time = time.time() - start_time
+                st.success(f"✅ Policy '{policy_name}' processed and saved successfully in {total_time:.1f} seconds!")
+
                 job_id = saved_result.get("job_id")
                 if job_id:
                     st.session_state.last_job_id = job_id
-                    
+
                     # Display summary
                     results_data = saved_result.get("results", {})
-                    
+
                     col1, col2, col3 = st.columns(3)
                     with col1:
                         st.metric("Policy Name", policy_name)
@@ -1520,7 +1681,14 @@ async def process_policy_document(
                     with col3:
                         total_trees = len(results_data.get("decision_trees", []))
                         st.metric("Decision Trees", total_trees)
-                    
+
+                    # Show stage timing breakdown
+                    if stage_times:
+                        with st.expander("⏱️ Processing Time Breakdown"):
+                            for stage, duration in stage_times.items():
+                                if stage != "Initializing":
+                                    st.caption(f"• {stage}: {duration:.1f}s")
+
                     st.info(f"Job ID: `{job_id}` - Switch to 'Review Decision Trees' tab to view results")
             else:
                 st.warning("Document processed but failed to save to database")
@@ -1587,27 +1755,41 @@ with tab1:
     if uploaded_file is not None:
         st.markdown("---")
 
-        # Show file info
+        # Show file info and validate size
         file_size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
-        st.info(f"**File:** {uploaded_file.name} | **Size:** {file_size_mb:.2f} MB")
 
-        # Validation and processing
-        if st.button(" Process Document", type="primary", use_container_width=True):
-            # Validate policy name
-            if not policy_name or not policy_name.strip():
-                st.error("⚠️ Please provide a policy name before processing.")
-            elif db_ops.policy_name_exists(policy_name.strip()):
-                st.error(f"⚠️ Policy name '{policy_name.strip()}' already exists. Please choose a unique name.")
-            else:
-                # Run async processing
-                asyncio.run(process_policy_document(
-                    uploaded_file.getvalue(),
-                    uploaded_file.name,
-                    policy_name.strip(),
-                    use_gpt4,
-                    enable_streaming,
-                    confidence_threshold
-                ))
+        # Validate file size (max 50MB, matching server limit)
+        MAX_FILE_SIZE_MB = 50
+        if file_size_mb > MAX_FILE_SIZE_MB:
+            st.error(f"❌ File too large: {file_size_mb:.1f}MB (maximum {MAX_FILE_SIZE_MB}MB)")
+            st.caption("Please compress or split the PDF before uploading.")
+        else:
+            # Show file info
+            st.info(f"📄 **File:** {uploaded_file.name} | **Size:** {file_size_mb:.2f}MB")
+
+            # Warning for large files
+            if file_size_mb > 20:
+                st.warning(f"⚠️ Large file ({file_size_mb:.1f}MB) - processing may take 5-10 minutes")
+            elif file_size_mb > 10:
+                st.info(f"ℹ️ Medium file ({file_size_mb:.1f}MB) - processing may take 3-5 minutes")
+
+            # Validation and processing
+            if st.button("🚀 Process Document", type="primary", use_container_width=True):
+                # Validate policy name
+                if not policy_name or not policy_name.strip():
+                    st.error("⚠️ Please provide a policy name before processing.")
+                elif db_ops.policy_name_exists(policy_name.strip()):
+                    st.error(f"⚠️ Policy name '{policy_name.strip()}' already exists. Please choose a unique name.")
+                else:
+                    # Run async processing
+                    asyncio.run(process_policy_document(
+                        uploaded_file.getvalue(),
+                        uploaded_file.name,
+                        policy_name.strip(),
+                        use_gpt4,
+                        enable_streaming,
+                        confidence_threshold
+                    ))
 
     # Recent Jobs Section
     st.markdown("---")
@@ -1707,7 +1889,109 @@ with tab2:
                         </p>
                     </div>
                     """, unsafe_allow_html=True)
-                    
+
+                    # Export Results Section
+                    st.markdown("### 💾 Export Results")
+                    col1, col2, col3, col4 = st.columns(4)
+
+                    with col1:
+                        # Export as JSON
+                        json_data = json.dumps(results_data, indent=2, default=str)
+                        st.download_button(
+                            label="📄 Download JSON",
+                            data=json_data,
+                            file_name=f"{st.session_state.current_policy_name.replace(' ', '_')}_results.json",
+                            mime="application/json",
+                            use_container_width=True
+                        )
+
+                    with col2:
+                        # Export decision trees as formatted text
+                        trees_text = "# Decision Trees Export\n\n"
+                        trees_text += f"Policy: {st.session_state.current_policy_name}\n"
+                        trees_text += f"Total Trees: {len(trees)}\n"
+                        trees_text += f"Exported: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                        trees_text += "=" * 80 + "\n\n"
+
+                        for i, tree in enumerate(trees, 1):
+                            trees_text += f"## Tree {i}: {tree.get('policy_title', 'Untitled')}\n"
+                            trees_text += f"Policy ID: {tree.get('policy_id', 'N/A')}\n\n"
+
+                            # Format tree structure
+                            def format_node(node, indent=0):
+                                text = ""
+                                prefix = "  " * indent
+
+                                if node.get("node_type") == "question":
+                                    q = node.get("question", {})
+                                    text += f"{prefix}❓ {q.get('question_text', 'N/A')}\n"
+
+                                    for child in node.get("children", []):
+                                        text += format_node(child, indent + 1)
+
+                                elif node.get("node_type") == "outcome":
+                                    outcome = node.get("outcome", "N/A")
+                                    outcome_type = node.get("outcome_type", "unknown")
+                                    emoji = {"approved": "✅", "denied": "❌", "requires_documentation": "📝"}.get(outcome_type, "ℹ️")
+                                    text += f"{prefix}{emoji} {outcome}\n"
+
+                                return text
+
+                            if "tree" in tree and "root" in tree["tree"]:
+                                trees_text += format_node(tree["tree"]["root"])
+
+                            trees_text += "\n" + "=" * 80 + "\n\n"
+
+                        st.download_button(
+                            label="🌳 Download Trees (TXT)",
+                            data=trees_text,
+                            file_name=f"{st.session_state.current_policy_name.replace(' ', '_')}_trees.txt",
+                            mime="text/plain",
+                            use_container_width=True
+                        )
+
+                    with col3:
+                        # Export quality metrics as CSV
+                        metrics_csv = "Metric,Value\n"
+
+                        if "quality_metrics" in results_data:
+                            metrics = results_data["quality_metrics"]
+                            metrics_csv += f"Traceability,{metrics.get('traceability_score', 0):.2%}\n"
+                            metrics_csv += f"Confidence,{metrics.get('confidence_score', 0):.2%}\n"
+                            metrics_csv += f"Completeness,{metrics.get('completeness_score', 0):.2%}\n"
+                            metrics_csv += f"Consistency,{metrics.get('consistency_score', 0):.2%}\n"
+                            metrics_csv += f"Total Issues,{metrics.get('total_issues', 0)}\n"
+                            metrics_csv += f"Errors,{metrics.get('errors', 0)}\n"
+                            metrics_csv += f"Warnings,{metrics.get('warnings', 0)}\n"
+
+                        if "policy_hierarchy" in results_data:
+                            hierarchy = results_data["policy_hierarchy"]
+                            metrics_csv += f"Total Policies,{hierarchy.get('total_policies', 0)}\n"
+
+                        metrics_csv += f"Decision Trees,{len(trees)}\n"
+
+                        st.download_button(
+                            label="📊 Download Metrics (CSV)",
+                            data=metrics_csv,
+                            file_name=f"{st.session_state.current_policy_name.replace(' ', '_')}_metrics.csv",
+                            mime="text/csv",
+                            use_container_width=True
+                        )
+
+                    with col4:
+                        # Export policy hierarchy as JSON
+                        if "policy_hierarchy" in results_data:
+                            hierarchy_json = json.dumps(results_data["policy_hierarchy"], indent=2, default=str)
+                            st.download_button(
+                                label="🏛️ Download Hierarchy",
+                                data=hierarchy_json,
+                                file_name=f"{st.session_state.current_policy_name.replace(' ', '_')}_hierarchy.json",
+                                mime="application/json",
+                                use_container_width=True
+                            )
+
+                    st.markdown("---")
+
                     # Create branch selector dropdown
                     st.markdown("### 🌳 Select Decision Tree Branch")
                     
@@ -1736,26 +2020,79 @@ with tab2:
                     
                     with col_left:
                         st.markdown("### 📄 Source Document")
-                        
+
                         # Check if we have the original PDF
                         if 'document_content' in results_data and results_data['document_content']:
-                            import base64
-                            
-                            # Display PDF
+                            # Get PDF data
                             pdf_data = results_data['document_content']
-                            
-                            # Create PDF viewer
-                            pdf_base64 = base64.b64encode(pdf_data).decode('utf-8')
-                            pdf_display = f'''
-                            <iframe 
-                                src="data:application/pdf;base64,{pdf_base64}" 
-                                width="100%" 
-                                height="800" 
-                                type="application/pdf"
-                                style="border: 2px solid #e0e0e0; border-radius: 8px;">
-                            </iframe>
-                            '''
-                            st.markdown(pdf_display, unsafe_allow_html=True)
+                            pdf_size_mb = len(pdf_data) / (1024 * 1024)
+                            job_id = results_data.get('job_id', 'unknown')
+
+                            # Check if PDF server is running
+                            pdf_server_available = check_pdf_server_running()
+
+                            # For large PDFs (>5MB), use PDF server if available
+                            if pdf_size_mb > 5:
+                                if pdf_server_available:
+                                    # Use HTTP server to display large PDF
+                                    st.success(f"📄 PDF ({pdf_size_mb:.1f} MB) - Viewing via HTTP server")
+
+                                    pdf_url = f"{PDF_SERVER_URL}/pdf/{job_id}"
+                                    pdf_viewer_html = f'''
+                                    <iframe
+                                        src="{pdf_url}"
+                                        width="100%"
+                                        height="800"
+                                        type="application/pdf"
+                                        style="border: 2px solid #e0e0e0; border-radius: 8px;">
+                                        <p>Loading PDF from server...</p>
+                                    </iframe>
+                                    '''
+                                    st.markdown(pdf_viewer_html, unsafe_allow_html=True)
+
+                                    # Also provide download option
+                                    st.download_button(
+                                        label="📥 Download PDF",
+                                        data=pdf_data,
+                                        file_name=results_data.get('document_filename', 'policy.pdf'),
+                                        mime="application/pdf",
+                                        use_container_width=True
+                                    )
+                                else:
+                                    # PDF server not available, show warning and download button
+                                    st.warning(f"⚠️ PDF server not running - Large PDF ({pdf_size_mb:.1f} MB) cannot be displayed inline")
+                                    st.info("💡 **Tip**: Restart the application to enable inline viewing of large PDFs")
+
+                                    st.download_button(
+                                        label=f"📥 Download PDF to View ({pdf_size_mb:.1f} MB)",
+                                        data=pdf_data,
+                                        file_name=results_data.get('document_filename', 'policy.pdf'),
+                                        mime="application/pdf",
+                                        use_container_width=True,
+                                        type="primary"
+                                    )
+                            else:
+                                # Small PDF (<5MB), use data URI (works inline)
+                                pdf_base64 = base64.b64encode(pdf_data).decode('utf-8')
+                                pdf_display = f'''
+                                <iframe
+                                    src="data:application/pdf;base64,{pdf_base64}"
+                                    width="100%"
+                                    height="800"
+                                    type="application/pdf"
+                                    style="border: 2px solid #e0e0e0; border-radius: 8px;">
+                                    <p>Loading PDF...</p>
+                                </iframe>
+                                '''
+                                st.markdown(pdf_display, unsafe_allow_html=True)
+
+                                st.download_button(
+                                    label="📥 Download PDF",
+                                    data=pdf_data,
+                                    file_name=results_data.get('document_filename', 'policy.pdf'),
+                                    mime="application/pdf",
+                                    use_container_width=True
+                                )
                         else:
                             st.info("📄 PDF preview not available for this policy")
                             

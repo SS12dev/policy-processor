@@ -57,25 +57,66 @@ NODE TYPES:
 - "decision": System logic check (AND/OR conditions)
 - "outcome": Terminal node (approved, denied, refer_to_manual, etc.)
 
-QUESTION TYPES:
-- "yes_no": Binary yes/no questions
-- "multiple_choice": Select from options
-- "numeric_range": Numeric value in range
-- "date": Date-based questions
+QUESTION TYPES - Choose the MOST APPROPRIATE type for each requirement:
+
+1. "yes_no" - Binary yes/no questions
+   Use for: Simple binary decisions
+   Example: "Is the patient 18 years or older?"
+   Routing: {"yes": {...}, "no": {...}}
+
+2. "numeric_range" - Numeric value questions with ranges
+   Use for: Age, BMI, lab values, measurements, dosages
+   Example: "What is the patient's BMI?"
+   Routing: Based on value ranges {">=40": {...}, "35-39": {...}, "<35": {...}}
+
+3. "multiple_choice" - Select one option from 3+ distinct choices
+   Use for: Diagnosis types, procedure categories, treatment options
+   Example: "What is the patient's diagnosis?"
+   Routing: {"Type 1 Diabetes": {...}, "Type 2 Diabetes": {...}, "Gestational Diabetes": {...}}
+
+4. "conditional" - ANY/ALL of the following requirements
+   Use for: When policy says "any of the following" or "all of the following"
+   Example: "Does the patient meet ANY of these criteria?"
+   Routing: {"meets_criteria": {...}, "does_not_meet": {...}}
+
+5. "date_based" - Time-sensitive or recency checks
+   Use for: "within X months", "before/after date", waiting periods
+   Example: "Has the patient had this procedure within the last 12 months?"
+   Routing: {"within_timeframe": {...}, "outside_timeframe": {...}}
+
+6. "categorical" - Classification or type selection
+   Use for: Imaging types, surgical procedures, medication classes
+   Example: "What type of imaging was performed?"
+   Routing: {"CT Scan": {...}, "MRI": {...}, "Ultrasound": {...}, "X-Ray": {...}}
+
+QUESTION TYPE SELECTION GUIDELINES:
+- DEFAULT to yes_no ONLY for true binary decisions
+- USE numeric_range for ANY numeric value (age, BMI, lab results, dosage)
+- USE multiple_choice when policy lists 3+ specific options
+- USE conditional when policy says "any of" or "all of the following"
+- USE date_based for time/recency requirements
+- USE categorical for procedure/diagnosis/treatment type selection
+
+DO NOT use yes_no for everything - choose the type that best represents the policy logic!
 
 ROUTING RULES:
-For YES/NO questions:
-  "children": {
-    "yes": { /* approval path or next question */ },
-    "no": { /* denial path or alternative check */ }
-  }
+For YES/NO:
+  "children": {"yes": {...}, "no": {...}}
+
+For NUMERIC_RANGE:
+  "children": {">=40": {...}, "35-39": {...}, "<35": {...}}
 
 For MULTIPLE_CHOICE:
-  "children": {
-    "option_1_value": { /* path for option 1 */ },
-    "option_2_value": { /* path for option 2 */ },
-    "other": { /* fallback path */ }
-  }
+  "children": {"option_1": {...}, "option_2": {...}, "option_3": {...}}
+
+For CONDITIONAL:
+  "children": {"meets_criteria": {...}, "does_not_meet": {...}}
+
+For DATE_BASED:
+  "children": {"within_timeframe": {...}, "outside_timeframe": {...}}
+
+For CATEGORICAL:
+  "children": {"category_1": {...}, "category_2": {...}, "other": {...}}
 
 OUTCOME TYPES:
 - "approved": Application meets all requirements
@@ -88,16 +129,151 @@ CRITICAL REQUIREMENTS:
 1. EVERY question must have routing for ALL possible answers
 2. EVERY path must eventually lead to an outcome node
 3. Use decision nodes for complex AND/OR logic
-4. Include source references with page numbers
+4. **Include source references with page numbers for ALL nodes** (questions AND outcomes)
 5. Keep questions clear and unambiguous
 6. Ensure logical flow matches policy intent
 7. **RETURN VALID JSON** - check for trailing commas and complete all brackets
+
+SOURCE REFERENCE REQUIREMENTS (CRITICAL FOR TRACEABILITY):
+===========================================================
+**QUESTION NODES** - MUST include source_references:
+  - Reference the policy section that necessitates this question
+  - Include page_number, section name, and quoted_text
+  - Quote the exact policy language that requires this check
+
+**OUTCOME NODES** - MUST include source_references:
+  - Reference the policy section that defines this approval/denial/requirement
+  - Include page_number, section name, and quoted_text
+  - Quote the policy language that determines this outcome
+  - THIS IS CRITICAL - outcome nodes without references reduce traceability score
+
+Example QUESTION node with references:
+{
+  "node_type": "question",
+  "question": {
+    "question_text": "Is patient BMI >= 40?",
+    "source_references": [{
+      "page_number": 2,
+      "section": "Eligibility Criteria",
+      "quoted_text": "Bariatric surgery requires BMI >= 40 kg/m2"
+    }]
+  }
+}
+
+Example OUTCOME node with references (REQUIRED):
+{
+  "node_type": "outcome",
+  "outcome": "APPROVED: Patient meets all bariatric surgery criteria",
+  "outcome_type": "approved",
+  "source_references": [{
+    "page_number": 8,
+    "section": "Coverage Determination",
+    "quoted_text": "Coverage approved when patient meets BMI criteria, has documented weight loss history, and completes multidisciplinary regimen."
+  }],
+  "confidence_score": 0.95
+}
+
+DETAILED QUESTION TYPE EXAMPLES:
+=================================
+When analyzing a policy, choose the question type that BEST represents the requirement:
+
+Example 1: Age requirement
+Policy text: "Patient must be 65 years or older"
+✓ GOOD: numeric_range - "What is the patient's age?" (precise, captures exact value)
+✗ BAD:  yes_no - "Is patient 65 or older?" (loses precision)
+
+Example 2: Multiple diagnoses
+Policy text: "Covered diagnoses include: Type 1 DM, Type 2 DM, Gestational DM"
+✓ GOOD: multiple_choice - "What is the diagnosis?" with options listed
+✗ BAD:  yes_no for each (creates 3 questions instead of 1)
+
+Example 3: ANY of the following
+Policy text: "Patient must meet ANY of: BMI>=40, BMI>=35 with comorbidities, or failed other treatments"
+✓ GOOD: conditional - "Does patient meet ANY of these criteria?" (list criteria)
+✗ BAD:  yes_no for each (loses the ANY/OR logic)
+
+Example 4: Time-based requirement
+Policy text: "Must have had lab work within past 6 months"
+✓ GOOD: date_based - "When was last lab work completed?"
+✗ BAD:  yes_no - "Was lab work within 6 months?" (loses exact date)
+
+Example 5: Procedure type
+Policy text: "Covered imaging: CT, MRI, Ultrasound, or X-Ray"
+✓ GOOD: categorical - "What type of imaging was performed?"
+✗ BAD:  yes_no for each type (inefficient)
+
+TREE DEPTH REQUIREMENTS (Target: 3-5 levels):
+================================================
+Break complex conditions into logical sequential steps for better granularity.
+
+SHALLOW TREES (BAD - Depth 1-2):
+✗ Single question → Outcome
+✗ Misses intermediate decision steps
+✗ Oversimplifies complex requirements
+
+Example BAD tree:
+Q1: "Does patient meet all criteria for bariatric surgery?"
+  → YES: Approved
+  → NO: Denied
+Problem: "All criteria" should be broken into separate checks!
+
+OPTIMAL TREES (GOOD - Depth 3-5):
+✓ Break complex conditions into logical sequential steps
+✓ Each level represents a distinct decision point
+✓ Clear progression from broad → specific
+
+Example GOOD tree:
+Q1: "What is patient BMI?"
+  → >=40: Q2: "Has patient completed required counseling?"
+             → YES: Q3: "Are there any contraindications?"
+                      → NO: Approved
+                      → YES: Denied
+             → NO: Requires Documentation
+  → 35-39: Q2: "Does patient have documented comorbidities?"
+              → YES: Q3: "Has patient completed counseling?"
+                         (continue...)
+              → NO: Denied
+  → <35: Denied
+
+DECOMPOSITION RULES:
+1. AND Conditions → Sequential Questions (Deeper Tree)
+   Policy: "Patient must have BMI >= 35 AND diabetes AND failed medication"
+   Tree: Q1 (BMI) → Q2 (Diabetes) → Q3 (Medication failure)
+
+2. OR Conditions → Branching Children (Wider Tree)
+   Policy: "Approved if BMI >= 40 OR (BMI >= 35 AND comorbidities)"
+   Tree: Q1 (BMI check) branches to different paths
+
+3. Multi-Step Processes → Sequential Levels
+   Policy: "Initial screening → Clinical assessment → Final approval"
+   Tree: Q1 (Screening) → Q2 (Assessment) → Q3 (Approval criteria)
+
+4. Compound Requirements → Break Into Atomic Steps
+   Policy: "Coverage requires: (1) diagnosis, (2) failed treatment for 6+ months, (3) no contraindications"
+   Tree: Q1 (Diagnosis) → Q2 (Treatment duration) → Q3 (Contraindications)
+
+DEPTH TARGETS BY COMPLEXITY:
+- Simple policy (1-2 requirements): 2-3 levels OK
+- Standard policy (3-5 requirements): 3-4 levels recommended
+- Complex policy (6+ requirements): 4-5 levels recommended
+- Very complex multi-step approval: 5-6 levels acceptable
+
+DO NOT CREATE:
+✗ Single-level trees (question → outcome only)
+✗ Compound questions that pack multiple checks into one
+✗ Trees that skip intermediate decision logic
+
+ALWAYS ASK YOURSELF:
+✓ Can this question be broken into smaller steps?
+✓ Are there intermediate checks between this and the outcome?
+✓ Does the policy describe a multi-step process?
 
 SIZE LIMITS:
 - Keep trees FOCUSED and MANAGEABLE (max 8-10 questions)
 - If policy is complex, prioritize the MOST IMPORTANT criteria
 - Use outcome nodes with detailed explanations rather than endless questions
 - NEVER truncate JSON - complete the entire structure properly
+- Aim for 3-5 levels of depth for optimal granularity
 
 EXAMPLE:
 {
@@ -123,7 +299,12 @@ EXAMPLE:
           "question_id": "q2",
           "question_text": "Do you have existing health insurance?",
           "question_type": "yes_no",
-          "explanation": "Policy covers both insured and uninsured individuals"
+          "explanation": "Policy covers both insured and uninsured individuals",
+          "source_references": [{
+            "page_number": 2,
+            "section": "Insurance Requirements",
+            "quoted_text": "Coverage is available for both insured and uninsured applicants"
+          }]
         },
         "children": {
           "yes": {
@@ -131,6 +312,11 @@ EXAMPLE:
             "node_type": "outcome",
             "outcome": "Approved - Meets age and insurance requirements",
             "outcome_type": "approved",
+            "source_references": [{
+              "page_number": 3,
+              "section": "Coverage Determination",
+              "quoted_text": "Applicants who meet age and insurance requirements are approved for coverage"
+            }],
             "confidence_score": 0.95
           },
           "no": {
@@ -138,6 +324,11 @@ EXAMPLE:
             "node_type": "outcome",
             "outcome": "Approved - Meets age requirement, eligible for uninsured coverage",
             "outcome_type": "approved",
+            "source_references": [{
+              "page_number": 3,
+              "section": "Coverage for Uninsured",
+              "quoted_text": "Uninsured applicants meeting age requirements are eligible for coverage"
+            }],
             "confidence_score": 0.9
           }
         },
@@ -295,6 +486,31 @@ Create a complete decision tree that:
 - For MULTIPLE criteria: Create separate questions for each
 - For AND conditions: ALL must pass → ask sequentially, fail fast on first "no"
 - For OR conditions: ANY can pass → ask each, route to approval on first "yes"
+
+=== QUESTION QUALITY RULES ===
+AVOID VAGUE QUESTIONS:
+❌ BAD: "Do you meet the requirements?"
+✅ GOOD: "Is your BMI 40 or greater, OR 35-39.9 with documented comorbidities?"
+
+❌ BAD: "Have you tried losing weight?"
+✅ GOOD: "Have you completed at least 6 months of medically supervised weight loss with less than 10% weight reduction?"
+
+❌ BAD: "Does the prior surgery meet specific employment and coverage conditions?"
+✅ GOOD: "Was the prior surgery performed while you were employed by your current employer AND covered under a benefit contract that counts toward the lifetime limit?"
+
+❌ BAD: "Is medical management appropriate?"
+✅ GOOD: "Have you attempted evidence-based medical management for at least 12 months, including diet modification, exercise program, and behavioral therapy, without achieving sustained weight loss?"
+
+INCLUDE SPECIFICS:
+- Timeframes: "6 months", "12 months", "within 30 days"
+- Thresholds: "BMI ≥ 40", "Age 18-65", "10% weight reduction"
+- Lists: "diabetes, hypertension, sleep apnea, or other comorbidities"
+- Criteria: "medically supervised", "documented attempts", "FDA-approved"
+
+ADD CONTEXT:
+- explanation: Why this question matters for eligibility
+- help_text: How to answer if unsure (e.g., "Ask your doctor", "Check your insurance card")
+- validation_rules: For numeric/date questions, specify min/max/required
 
 === EXAMPLE STRUCTURE ===
 For a policy with conditions: "BMI ≥40" AND "Age 18-65" AND "6 months supervised weight loss"
@@ -492,15 +708,45 @@ def get_leaf_prompt(
     policy_level: int,
     conditions: list,
     parent_context: str,
-    context: str
+    context: str,
+    source_references: list = None
 ) -> str:
-    """Generate prompt for leaf tree creation."""
+    """
+    Generate prompt for leaf tree creation.
+
+    Args:
+        policy_title: Title of the policy
+        policy_description: Description of the policy
+        policy_level: Hierarchy level (0=root, 1=child, etc.)
+        conditions: List of PolicyCondition objects
+        parent_context: Context about parent policy
+        context: Additional context
+        source_references: List of SourceReference objects from policy
+
+    Returns:
+        Complete prompt string
+    """
     conditions_text = "\n".join([
         f"{i+1}. {getattr(cond, 'description', str(cond))} ({getattr(cond, 'logic_type', 'AND')})"
         for i, cond in enumerate(conditions)
     ]) if conditions else "No explicit conditions listed"
 
     parent_info = f"Parent Policy: {parent_context}" if parent_context else "This is a root-level policy"
+
+    # Add source reference information to help LLM include page numbers
+    source_info = ""
+    if source_references and len(source_references) > 0:
+        source_info = "\n\n=== SOURCE REFERENCES ===\n"
+        source_info += "This policy is documented on the following pages:\n"
+        for i, ref in enumerate(source_references[:5]):  # Limit to top 5 sources
+            page = getattr(ref, 'page_number', 'N/A')
+            section = getattr(ref, 'section_title', 'N/A')
+            source_info += f"- Page {page}"
+            if section and section != 'N/A':
+                source_info += f", Section: {section}"
+            source_info += "\n"
+        source_info += "\n**IMPORTANT**: Include these page numbers in your source_references when generating questions.\n"
+        source_info += "Example: \"source_references\": [{\"page_number\": " + str(getattr(source_references[0], 'page_number', 1)) + ", \"section\": \"" + getattr(source_references[0], 'section_title', 'Policy') + "\", \"quoted_text\": \"...\"}]\n"
 
     # Combine system prompt with specific instructions
     specific_prompt = LEAF_TREE_PROMPT_TEMPLATE.format(
@@ -509,9 +755,9 @@ def get_leaf_prompt(
         policy_level=policy_level,
         parent_context=parent_info,
         conditions_text=conditions_text,
-        context=context
+        context=context + source_info
     )
-    
+
     return f"{DECISION_TREE_SYSTEM_PROMPT}\n\n{specific_prompt}"
 
 

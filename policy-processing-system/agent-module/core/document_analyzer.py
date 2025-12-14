@@ -260,15 +260,17 @@ class DocumentAnalyzer:
         if is_toc:
             content_type_scores[PageContentType.TABLE_OF_CONTENTS] = 1.0
 
-        # Check position in document
+        # Check position in document (only for documents with 10+ pages)
+        # Short documents (<10 pages) often don't have appendix/index sections
         position_ratio = page.page_number / pdf_metadata.total_pages
-        if position_ratio < 0.1:  # First 10% likely admin/TOC
-            content_type_scores[PageContentType.ADMINISTRATIVE] += 0.3
-            content_type_scores[PageContentType.TABLE_OF_CONTENTS] += 0.2
-        elif position_ratio > 0.9:  # Last 10% likely appendix/index
-            content_type_scores[PageContentType.APPENDIX] += 0.3
-            content_type_scores[PageContentType.INDEX] += 0.3
-            content_type_scores[PageContentType.REFERENCES] += 0.2
+        if pdf_metadata.total_pages >= 10:
+            if position_ratio < 0.1:  # First 10% likely admin/TOC
+                content_type_scores[PageContentType.ADMINISTRATIVE] += 0.3
+                content_type_scores[PageContentType.TABLE_OF_CONTENTS] += 0.2
+            elif position_ratio > 0.9:  # Last 10% likely appendix/index
+                content_type_scores[PageContentType.APPENDIX] += 0.3
+                content_type_scores[PageContentType.INDEX] += 0.3
+                content_type_scores[PageContentType.REFERENCES] += 0.2
 
         # Check for list-heavy content (definitions often list-like)
         if len([line for line in text_lines if line.strip().startswith(('•', '-', '*'))]) > 10:

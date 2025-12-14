@@ -602,12 +602,16 @@ class Validator:
         """
         Check traceability to source material.
 
+        Recursively checks ALL nodes in decision trees for source references.
+        Improved to properly count question node references which are nested
+        in the question object.
+
         Args:
             policy_hierarchy: PolicyHierarchy object
             decision_trees: List of DecisionTree objects
 
         Returns:
-            Traceability score
+            Traceability score (percentage of items with valid source references)
         """
         total_items = 0
         items_with_references = 0
@@ -618,23 +622,59 @@ class Validator:
             if policy.source_references:
                 items_with_references += 1
 
-        # Check decision tree nodes
+        # Check decision tree nodes (improved recursive checking)
         for tree in decision_trees:
             def check_node(node: DecisionNode):
                 nonlocal total_items, items_with_references
-                total_items += 1
-                if node.source_references:
-                    items_with_references += 1
 
+                if not node:
+                    return
+
+                total_items += 1
+
+                # Check question node - references are in question object
+                if node.node_type == "question" and node.question:
+                    refs = node.question.source_references
+                    if refs and len(refs) > 0:
+                        # Verify at least one reference has required fields
+                        valid_refs = [
+                            r for r in refs
+                            if (hasattr(r, 'page_number') and r.page_number) or
+                               (hasattr(r, 'quoted_text') and r.quoted_text)
+                        ]
+                        if valid_refs:
+                            items_with_references += 1
+
+                # Check outcome node - references are on node itself
+                elif node.node_type == "outcome":
+                    if node.source_references and len(node.source_references) > 0:
+                        valid_refs = [
+                            r for r in node.source_references
+                            if (hasattr(r, 'page_number') and r.page_number) or
+                               (hasattr(r, 'quoted_text') and r.quoted_text)
+                        ]
+                        if valid_refs:
+                            items_with_references += 1
+
+                # Recursively check all children
                 for child in node.children.values():
                     check_node(child)
 
-            check_node(tree.root_node)
+            if tree.root_node:
+                check_node(tree.root_node)
 
         if total_items == 0:
             return 0.0
 
-        return items_with_references / total_items
+        traceability = items_with_references / total_items
+
+        # Log traceability calculation for debugging
+        logger.info(
+            f"Traceability calculation: {items_with_references}/{total_items} items "
+            f"with valid source references ({traceability:.1%})"
+        )
+
+        return traceability
 
     def _calculate_overall_confidence(
         self, policy_hierarchy: PolicyHierarchy, decision_trees: List[DecisionTree]

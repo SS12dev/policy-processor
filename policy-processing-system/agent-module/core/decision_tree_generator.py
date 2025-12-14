@@ -627,7 +627,8 @@ class DecisionTreeGenerator:
             policy_level=policy.level,
             conditions=policy.conditions,
             parent_context=parent_context_str,
-            context=str(context)
+            context=str(context),
+            source_references=policy.source_references if hasattr(policy, 'source_references') else []
         )
 
         if self.llm is None:
@@ -849,7 +850,8 @@ Return a JSON object with the decision tree structure."""
             policy_level=policy.level,
             conditions=policy.conditions,
             parent_context="",
-            context=f"Policy Level: {policy.level}\nConditions: {len(policy.conditions)}"
+            context=f"Policy Level: {policy.level}\nConditions: {len(policy.conditions)}",
+            source_references=policy.source_references if hasattr(policy, 'source_references') else []
         )
 
     def _parse_tree_result(self, result: Dict[str, Any], policy: SubPolicy) -> DecisionTree:
@@ -968,7 +970,19 @@ Return a JSON object with the decision tree structure."""
 
         # Parse source references
         source_refs = []
-        if "page_number" in node_data:
+        # First check for source_references array (new format from LLM)
+        if "source_references" in node_data and isinstance(node_data["source_references"], list):
+            for ref_data in node_data["source_references"]:
+                if isinstance(ref_data, dict):
+                    source_refs.append(
+                        SourceReference(
+                            page_number=ref_data.get("page_number", 1),
+                            section=ref_data.get("section", ""),
+                            quoted_text=ref_data.get("quoted_text", "")[:500],
+                        )
+                    )
+        # Fallback: check for flat fields (backwards compatibility)
+        elif "page_number" in node_data:
             source_refs.append(
                 SourceReference(
                     page_number=node_data.get("page_number", 1),
@@ -1028,7 +1042,19 @@ Return a JSON object with the decision tree structure."""
 
         # Parse source references
         source_refs = []
-        if "page_number" in question_data:
+        # First check for source_references array (new format from LLM)
+        if "source_references" in question_data and isinstance(question_data["source_references"], list):
+            for ref_data in question_data["source_references"]:
+                if isinstance(ref_data, dict):
+                    source_refs.append(
+                        SourceReference(
+                            page_number=ref_data.get("page_number", 1),
+                            section=ref_data.get("section", ""),
+                            quoted_text=ref_data.get("quoted_text", "")[:500],
+                        )
+                    )
+        # Fallback: check for flat fields (backwards compatibility)
+        elif "page_number" in question_data:
             source_refs.append(
                 SourceReference(
                     page_number=question_data.get("page_number", 1),

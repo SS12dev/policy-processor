@@ -65,3 +65,7 @@ dump.rdb
 # Generated results
 results_*.json
 results_*.html
+
+# Vendor binaries (auto-downloaded)
+policy-processing-system/agent-module/vendor/
+policy-processing-system/agent-module/vendor/poppler/

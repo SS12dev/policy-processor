@@ -71,18 +71,62 @@ class PolicyProcessingClient:
                 if "asynchronous generator is already running" not in str(e):
                     raise
 
-    async def check_health(self) -> bool:
-        """Check if the agent is healthy."""
+    async def check_health(self) -> Dict[str, Any]:
+        """
+        Check agent server health (non-blocking).
+
+        Returns:
+            Dictionary with health status information:
+            - available: bool - Whether agent is available
+            - status: str - "online", "degraded", "timeout", or "offline"
+            - active_jobs: int - Number of active jobs (if available)
+            - redis: str - Redis connection status (if available)
+            - error: str - Error message (if failed)
+        """
         try:
             if not self.http_client:
                 self.http_client = httpx.AsyncClient(timeout=httpx.Timeout(5.0))
-            
-            response = await self.http_client.get(f"{self.agent_url}/health")
-            response.raise_for_status()
-            return response.json().get("status") == "healthy"
+
+            # Use /health/ready endpoint for detailed status
+            response = await asyncio.wait_for(
+                self.http_client.get(f"{self.agent_url}/health/ready"),
+                timeout=5.0
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                return {
+                    "available": True,
+                    "status": "online",
+                    "active_jobs": data.get("active_jobs", 0),
+                    "redis": data.get("redis", "unknown"),
+                    "timestamp": data.get("timestamp", "")
+                }
+            else:
+                # Server responded but not ready (503)
+                data = response.json()
+                return {
+                    "available": False,
+                    "status": "degraded",
+                    "active_jobs": data.get("active_jobs"),
+                    "redis": data.get("redis", "disconnected"),
+                    "details": data
+                }
+
+        except asyncio.TimeoutError:
+            logger.warning("[CLIENT] Health check timeout")
+            return {
+                "available": False,
+                "status": "timeout",
+                "error": "Health check timed out after 5 seconds"
+            }
         except Exception as e:
             logger.error(f"[CLIENT] Health check failed: {str(e)}")
-            return False
+            return {
+                "available": False,
+                "status": "offline",
+                "error": str(e)
+            }
 
     async def process_document(
         self,

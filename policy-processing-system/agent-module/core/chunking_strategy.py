@@ -307,33 +307,48 @@ class ChunkingStrategy:
             pa["page_number"]: pa
             for pa in doc_metadata.get("page_analyses", [])
         }
-        
+
+        # Get policy boundaries - pages with policy boundaries should NEVER be filtered
+        policy_boundary_pages = set()
+        for boundary in doc_metadata.get("policy_boundaries", []):
+            if isinstance(boundary, dict):
+                policy_boundary_pages.add(boundary.get("page_number"))
+            elif hasattr(boundary, "page_number"):
+                policy_boundary_pages.add(boundary.page_number)
+
         # Filter criteria
+        # Note: REFERENCES removed - medical policies often have critical references
+        # BIBLIOGRAPHY is sufficient for filtering citation lists
         non_policy_types = {
             PageContentType.TABLE_OF_CONTENTS.value,
             PageContentType.BIBLIOGRAPHY.value,
-            PageContentType.REFERENCES.value,
             PageContentType.INDEX.value,
             PageContentType.ADMINISTRATIVE.value,
         }
-        
+
         filtered_pages = []
         policy_pages = []
-        
+
         for page_dict in pages:
             page_num = page_dict["page_number"]
-            
+
+            # CRITICAL: Never filter pages with policy boundaries
+            if page_num in policy_boundary_pages:
+                policy_pages.append(page_dict)
+                logger.debug(f"Page {page_num}: Kept (contains policy boundary)")
+                continue
+
             # Check if explicitly marked for filtering
             if page_num in pages_to_filter_set:
                 filtered_pages.append(page_num)
                 logger.debug(f"Page {page_num}: Filtered (explicit guidance)")
                 continue
-            
+
             # Check page analysis
             page_analysis = page_analyses.get(page_num)
             if page_analysis:
                 primary_type = page_analysis.get("primary_content_type")
-                
+
                 # Filter non-policy content types
                 if primary_type in non_policy_types:
                     filtered_pages.append(page_num)
@@ -341,7 +356,7 @@ class ChunkingStrategy:
                         f"Page {page_num}: Filtered (type={primary_type})"
                     )
                     continue
-                
+
                 # Check quality - filter low-quality pages
                 quality_score = page_analysis.get("quality_score", 1.0)
                 if quality_score < 0.3:
@@ -350,7 +365,7 @@ class ChunkingStrategy:
                         f"Page {page_num}: Filtered (low quality={quality_score:.2f})"
                     )
                     continue
-            
+
             # Keep as policy page
             policy_pages.append(page_dict)
             logger.debug(f"Page {page_num}: Kept for processing")

@@ -164,15 +164,15 @@ class PolicyProcessingClient:
         logger.info(f"[CLIENT] Context ID: {context_id}")
 
         try:
-            # Build parameters JSON for the agent to extract
+            # Build parameters JSON (without document, which is sent as FilePart)
             import json
             parameters_json = json.dumps({
-                "document_base64": pdf_base64,
                 "use_gpt4": use_gpt4,
                 "enable_streaming": enable_streaming,
                 "confidence_threshold": confidence_threshold
             })
             
+            # Send file as FilePart (proper A2A way) and parameters as TextPart
             message = types.Message(
                 message_id=f"msg_{context_id}",
                 role=types.Role.user,
@@ -185,7 +185,7 @@ class PolicyProcessingClient:
                         )
                     )),
                     types.Part(root=types.TextPart(
-                        text=parameters_json  # Send parameters as JSON string
+                        text=parameters_json  # Send other parameters as JSON
                     ))
                 ],
                 context_id=context_id

@@ -380,19 +380,34 @@ class PolicyProcessorAgent(AgentExecutor):
         # Note: Actual cancellation implementation would require more complex state management
 
     def _extract_parameters(self, context: RequestContext) -> Dict[str, Any]:
-        """Extract parameters from the request context."""
+        """Extract parameters from the request context, including FilePart for documents."""
         try:
-            # Try to get user input and parse as JSON
+            parameters = {}
             user_input = context.message
+            
             if user_input and user_input.parts:
                 for part in user_input.parts:
-                    if isinstance(part.root, types.TextPart):
+                    # Extract file from FilePart (proper A2A way)
+                    if isinstance(part.root, types.FilePart):
+                        file_data = part.root.file
+                        if hasattr(file_data, 'bytes') and file_data.bytes:
+                            parameters["document_base64"] = file_data.bytes
+                            parameters["filename"] = getattr(file_data, 'name', 'document.pdf')
+                            logger.info(f"[AGENT] Extracted file from FilePart: {parameters['filename']}")
+                    
+                    # Extract other parameters from TextPart (JSON)
+                    elif isinstance(part.root, types.TextPart):
                         try:
-                            return json.loads(part.root.text)
+                            text_params = json.loads(part.root.text)
+                            # Merge text parameters, but don't override file data
+                            for key, value in text_params.items():
+                                if key not in parameters:
+                                    parameters[key] = value
                         except json.JSONDecodeError:
+                            # Not JSON, ignore
                             pass
 
-            return {}
+            return parameters
         except Exception as e:
             logger.error(f"Error extracting parameters: {e}")
             return {}
